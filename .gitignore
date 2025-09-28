@@ -89,3 +89,21 @@ Temporary Items
 # Temporary files
 *.tmp
 *.temp
+
+# GoogleTest generated files
+Testing/
+*.gcno
+*.gcda
+*.gcov
+
+# Dependencies
+_deps/
+
+# Redis specific
+dump.rdb
+*.rdb
+*.aof
+
+# Performance testing artifacts
+perf.data
+perf.data.old
