@@ -21,18 +21,29 @@ redis-clone-cpp/
 │   └── TestHelper.cmake   # Test configuration helpers
 ├── src/                   # Source code
 │   ├── CMakeLists.txt    # Source build configuration
-│   └── storage/          # Storage engine implementation
+│   ├── storage/          # Storage engine implementation
+│   │   ├── CMakeLists.txt
+│   │   ├── include/     # Public headers
+│   │   │   └── storage/
+│   │   │       └── database.h
+│   │   └── src/        # Implementation files
+│   │       └── database.cpp
+│   └── network/         # Network server implementation
 │       ├── CMakeLists.txt
-│       ├── include/      # Public headers
-│       │   └── storage/
-│       │       └── database.h
-│       └── src/         # Implementation files
-│           └── database.cpp
-├── test/                 # Test files
-│   ├── CMakeLists.txt   # Test configuration
+│       ├── include/     # Public headers
+│       │   └── network/
+│       │       └── server.h
+│       └── src/        # Implementation files
+│           └── server.cpp
+├── test/                # Test files
+│   ├── CMakeLists.txt  # Test configuration
 │   └── unit/           # Unit tests
-│       └── storage/    # Storage engine tests
-│           └── database_test.cpp
+│       ├── storage/    # Storage engine tests
+│       │   ├── CMakeLists.txt
+│       │   └── database_test.cpp
+│       └── network/    # Network component tests
+│           ├── CMakeLists.txt
+│           └── server_test.cpp
 └── scripts/            # Build and test scripts
     ├── build.sh       # Build script
     └── test.sh        # Test runner script
