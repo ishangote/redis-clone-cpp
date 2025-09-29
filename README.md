@@ -44,10 +44,13 @@ redis-clone-cpp/
 - **Storage Engine**: Basic key-value storage implementation
   - In-memory key-value store
   - String values support
-  - GET/SET operations
+  - GET/SET/DEL/EXISTS operations
+- **Network Layer**: TCP server implementation
+  - Redis protocol (RESP) support
+  - Basic command handling
+  - Signal handling for graceful shutdown
 
 ### Planned Components
-- **Network Layer**: TCP server implementation
 - **Data Structures**: Redis-like data structure support
 - **Replication**: Master-slave replication system
 - **Persistence**: Snapshot and AOF persistence
