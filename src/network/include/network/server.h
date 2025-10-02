@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <string>
 
 #include "storage/database.h"
@@ -36,6 +37,7 @@ class RedisServer {
     int port_;
     int server_fd_;  // Server socket file descriptor
     redis_clone::storage::Database db_;
+    std::mutex db_mutex_;
 
     /**
      * @brief Handles individual client connections

@@ -56,11 +56,14 @@ redis-clone-cpp/
   - In-memory key-value store
   - String values support
   - GET/SET/DEL/EXISTS operations
-- **Network Layer**: TCP server implementation
-  - Persistent client connections
+  - Thread-safe database operations with mutex protection
+- **Network Layer**: Multi-threaded TCP server implementation
+  - Concurrent client connections (one thread per client)
+  - Persistent client connections with proper cleanup
   - Basic command handling (GET/SET/DEL/EXISTS/QUIT)
   - Signal handling for graceful shutdown
   - Structured command parsing
+  - Robust error handling for client disconnections
 
 ### Planned Components
 - **Data Structures**: Redis-like data structure support
@@ -132,10 +135,17 @@ REDIS_CLONE_PORT=9000 ./build/bin/redis-clone-cpp
 Once the server is running, you can test it manually using netcat:
 
 ```bash
-# In another terminal, connect to the server
+# Connect multiple clients simultaneously
+# Terminal 1:
 nc localhost 6379
 
-# Try some commands (connection stays open):
+# Terminal 2 (concurrent connection):
+nc localhost 6379
+
+# Terminal 3 (another concurrent connection):
+nc localhost 6379
+
+# Each client can send commands independently:
 SET name john
 GET name
 SET age 25
@@ -146,7 +156,7 @@ EXISTS age
 QUIT    # Gracefully close the connection
 ```
 
-The server now maintains persistent connections and supports the QUIT command for clean disconnection.
+The server now supports **multiple concurrent clients** with thread-safe operations. Each client runs in its own thread and can send commands independently without affecting other clients.
 
 ## Development Workflow
 

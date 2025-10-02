@@ -2,15 +2,19 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <cctype>
 #include <cerrno>
+#include <csignal>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 // Declare the global running flag defined in main.cpp
 extern volatile sig_atomic_t g_running;
@@ -67,13 +71,13 @@ void RedisServer::run() {
         }
 
         try {
-            handle_client(client_fd);
+            std::thread client_thread(&RedisServer::handle_client, this, client_fd);
+            client_thread.detach();
         } catch (const std::exception& e) {
             // Log error but continue serving other clients
             std::cerr << "Error handling client: " << e.what() << std::endl;
+            close(client_fd);
         }
-
-        close(client_fd);
     }
 
     // Cleanup when shutting down
@@ -82,6 +86,12 @@ void RedisServer::run() {
 }
 
 void RedisServer::handle_client(int client_fd) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGINT);
+    sigaddset(&set, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &set, nullptr);
+
     constexpr size_t buffer_size = 1024;
     char buffer[buffer_size];
 
@@ -89,9 +99,9 @@ void RedisServer::handle_client(int client_fd) {
         ssize_t bytes_read = recv(client_fd, buffer, buffer_size - 1, 0);
         if (bytes_read <= 0) {
             if (bytes_read < 0) {
-                throw std::runtime_error("Error reading from client: " +
-                                         std::string(strerror(errno)));
+                std::cerr << "Client disconnected unexpectedly: " + std::string(strerror(errno));
             }
+            close(client_fd);
             return;  // Client closed connection
         }
 
@@ -107,6 +117,7 @@ void RedisServer::handle_client(int client_fd) {
         std::string response = process_command(command);
         send_command(client_fd, response);
     }
+    close(client_fd);
 }
 
 std::string RedisServer::process_command(const std::string& command) {
@@ -118,6 +129,8 @@ std::string RedisServer::process_command(const std::string& command) {
     for (char& c : cmd) {
         c = std::toupper(c);
     }
+
+    std::lock_guard<std::mutex> lock(db_mutex_);
 
     if (cmd == "SET") {
         std::string key, value;
@@ -174,7 +187,8 @@ RedisServer::CommandParts RedisServer::extract_command(const std::string& input)
 
 void RedisServer::send_command(int client_fd, const std::string& response) {
     if (send(client_fd, response.c_str(), response.size(), 0) < 0) {
-        throw std::runtime_error("Error sending response: " + std::string(strerror(errno)));
+        std::cerr << "Failed to send response to client: " << std::string(strerror(errno))
+                  << std::endl;
     }
 }
 
