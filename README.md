@@ -52,18 +52,20 @@ redis-clone-cpp/
 ## Components
 
 ### Current Implementation
-- **Storage Engine**: Basic key-value storage implementation
-  - In-memory key-value store
+- **Storage Engine**: Thread-safe key-value storage implementation
+  - In-memory key-value store using std::unordered_map
   - String values support
   - GET/SET/DEL/EXISTS operations
   - Thread-safe database operations with mutex protection
-- **Network Layer**: Multi-threaded TCP server implementation
-  - Concurrent client connections (one thread per client)
-  - Persistent client connections with proper cleanup
-  - Basic command handling (GET/SET/DEL/EXISTS/QUIT)
-  - Signal handling for graceful shutdown
-  - Structured command parsing
-  - Robust error handling for client disconnections
+- **Network Layer**: Multi-threaded TCP server with robust command processing
+  - **Multi-threading**: Concurrent client connections (one thread per client)
+  - **Buffer Management**: NEW - Robust handling of partial command reception across multiple recv() calls
+  - **Command Processing**: NEW - Complete command accumulation until proper terminators (\r\n or \n)
+  - **Thread Safety**: Mutex-protected database operations for concurrent access
+  - **Signal Handling**: Proper signal blocking in worker threads for graceful shutdown
+  - **Connection Management**: Persistent client connections with proper cleanup on disconnection
+  - **Error Handling**: Robust error handling for network failures and client disconnections
+  - **Redis Protocol**: Basic RESP (Redis Serialization Protocol) response formatting
 
 ### Planned Components
 - **Data Structures**: Redis-like data structure support
@@ -156,7 +158,69 @@ EXISTS age
 QUIT    # Gracefully close the connection
 ```
 
-The server now supports **multiple concurrent clients** with thread-safe operations. Each client runs in its own thread and can send commands independently without affecting other clients.
+The server supports **multiple concurrent clients** with thread-safe operations and **NEW: production-quality buffer management**. Recent improvements include:
+
+- **Buffer Management**: NEW - Handles partial commands that don't arrive in a single network packet
+- **Command Boundary Detection**: NEW - Properly detects complete commands using \r\n or \n terminators
+- **Partial Command Accumulation**: NEW - Accumulates command data across multiple recv() calls until complete
+
+Existing features:
+- **Concurrent Connections**: Each client runs in its own thread, allowing unlimited simultaneous connections
+- **Thread Safety**: All database operations are protected with mutexes to prevent race conditions
+- **Graceful Disconnection**: Proper cleanup when clients disconnect unexpectedly
+- **Signal Handling**: Worker threads block signals to ensure proper shutdown behavior
+
+Commands can be sent independently by each client without affecting others:
+
+## Architecture & Design
+
+### Multi-threaded Server Architecture
+The server implements a **one-thread-per-client** model with the following design:
+
+```
+Main Thread                    Worker Threads
+     |                              |
+┌────▼────┐                  ┌─────▼─────┐
+│ Accept  │                  │  Client   │
+│ Loop    │────────────────▶ │  Handler  │
+│         │                  │  Thread   │
+└─────────┘                  └───────────┘
+                                    │
+                               ┌────▼────┐
+                               │ Command │
+                               │ Buffer  │◄─── recv() calls
+                               │ Manager │
+                               └─────────┘
+                                    │
+                               ┌────▼────┐
+                               │Database │◄─── Mutex protected
+                               │Operations│
+                               └─────────┘
+```
+
+### Buffer Management (NEW)
+A critical networking challenge recently solved in this implementation:
+
+**Problem**: TCP doesn't guarantee that a complete command arrives in a single `recv()` call. Large commands or network conditions can cause partial reception, leading to parsing failures.
+
+**Example**: Command `"SET username john_doe_with_a_long_name"` might arrive as:
+- recv() call 1: `"SET username john_doe_with_a_lo"`
+- recv() call 2: `"ng_name"`
+
+**Solution**: Command buffer accumulation with terminator detection:
+1. **Persistent Buffer**: Maintain `std::string command_buffer` per client connection
+2. **Data Accumulation**: Append all recv() data to buffer using `command_buffer.append()`
+3. **Boundary Detection**: Scan for complete commands ending with \n or \r\n using `find('\n')`
+4. **Command Extraction**: Extract complete commands with `substr()` and remove with `erase()`
+5. **Partial Preservation**: Keep incomplete command data for next recv() cycle
+
+**Testing**: Verified by reducing buffer size to 30 bytes to simulate partial reception scenarios.
+
+### Thread Safety Model
+- **Database Layer**: Protected by `std::mutex` with RAII (`std::lock_guard`)
+- **Worker Threads**: Independent per-client threads with signal blocking
+- **Main Thread**: Handles accept() loop and signal management
+- **Memory Safety**: Automatic cleanup on client disconnection
 
 ## Development Workflow
 
@@ -183,18 +247,21 @@ The server now supports **multiple concurrent clients** with thread-safe operati
 - Database system internals
 
 ### Technical Goals
-1. Basic Redis Commands
-   - GET/SET operations
-   - Data structure operations
-   - Basic query support
-2. Networking
-   - TCP server implementation
-   - Redis protocol (RESP) support
-   - Client-server communication
-3. Advanced Features
-   - Replication
-   - Persistence
-   - Cluster support
+1. ✅ **Basic Redis Commands**
+   - GET/SET/DEL/EXISTS operations
+   - Basic string value support
+   - Error handling and validation
+2. ✅ **Networking**
+   - Multi-threaded TCP server implementation
+   - Concurrent client connection handling
+   - Basic Redis protocol (RESP) response formatting
+   - NEW: Production-quality buffer management for partial commands
+   - Thread-safe client-server communication
+3. 🚧 **Advanced Features** (Planned)
+   - Full Redis protocol (RESP) parsing
+   - Data structure operations (Lists, Sets, Hashes)
+   - Replication and clustering
+   - Persistence (RDB snapshots, AOF)
 
 ## Contributing
 

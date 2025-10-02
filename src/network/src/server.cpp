@@ -92,6 +92,8 @@ void RedisServer::handle_client(int client_fd) {
     sigaddset(&set, SIGTERM);
     pthread_sigmask(SIG_BLOCK, &set, nullptr);
 
+    std::string command_buffer;
+
     constexpr size_t buffer_size = 1024;
     char buffer[buffer_size];
 
@@ -105,17 +107,36 @@ void RedisServer::handle_client(int client_fd) {
             return;  // Client closed connection
         }
 
-        std::string command(buffer, bytes_read);
-        CommandParts parts = extract_command(command);
+        command_buffer.append(buffer, bytes_read);
+        // Check for complete commands (ending with \r\n or \n)
+        size_t pos;
+        while ((pos = command_buffer.find('\n')) != std::string::npos) {
+            // Extract one complete command
+            std::string complete_command = command_buffer.substr(0, pos);
 
-        if (parts.command == "QUIT") {
-            std::string response = "+OK\r\n";
-            send_command(client_fd, response);
-            break;
+            // Remove processed command from buffer (including the \n)
+            command_buffer.erase(0, pos + 1);
+
+            // Remove \r if present (handle \r\n)
+            if (!complete_command.empty() && complete_command.back() == '\r') {
+                complete_command.pop_back();
+            }
+
+            // Process this complete command
+            if (!complete_command.empty()) {
+                CommandParts parts = extract_command(complete_command);
+
+                if (parts.command == "QUIT") {
+                    std::string response = "+OK\r\n";
+                    send_command(client_fd, response);
+                    close(client_fd);
+                    return;
+                }
+
+                std::string response = process_command(complete_command);
+                send_command(client_fd, response);
+            }
         }
-
-        std::string response = process_command(command);
-        send_command(client_fd, response);
     }
     close(client_fd);
 }
