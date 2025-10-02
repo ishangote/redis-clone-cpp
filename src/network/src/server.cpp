@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -81,23 +82,30 @@ void RedisServer::run() {
 }
 
 void RedisServer::handle_client(int client_fd) {
-    // TODO: Consider enhancing to maintain persistent connections. Currently closes after one command.
     constexpr size_t buffer_size = 1024;
     char buffer[buffer_size];
 
-    ssize_t bytes_read = recv(client_fd, buffer, buffer_size - 1, 0);
-    if (bytes_read <= 0) {
-        if (bytes_read < 0) {
-            throw std::runtime_error("Error reading from client: " + std::string(strerror(errno)));
+    while (true) {
+        ssize_t bytes_read = recv(client_fd, buffer, buffer_size - 1, 0);
+        if (bytes_read <= 0) {
+            if (bytes_read < 0) {
+                throw std::runtime_error("Error reading from client: " +
+                                         std::string(strerror(errno)));
+            }
+            return;  // Client closed connection
         }
-        return;  // Client closed connection
-    }
 
-    std::string command(buffer, bytes_read);
-    std::string response = process_command(command);
+        std::string command(buffer, bytes_read);
+        CommandParts parts = extract_command(command);
 
-    if (send(client_fd, response.c_str(), response.size(), 0) < 0) {
-        throw std::runtime_error("Error sending response: " + std::string(strerror(errno)));
+        if (parts.command == "QUIT") {
+            std::string response = "+OK\r\n";
+            send_command(client_fd, response);
+            break;
+        }
+
+        std::string response = process_command(command);
+        send_command(client_fd, response);
     }
 }
 
@@ -140,9 +148,34 @@ std::string RedisServer::process_command(const std::string& command) {
             return "-ERR wrong number of arguments for 'exists' command\r\n";
         }
         return ":" + std::to_string(db_.exists(key)) + "\r\n";
+    } else if (cmd == "QUIT") {
+        return "+OK\r\n";
     }
 
     return "-ERR unknown command '" + cmd + "'\r\n";
+}
+
+RedisServer::CommandParts RedisServer::extract_command(const std::string& input) {
+    std::istringstream iss(input);
+    std::string cmd, key, value;
+
+    iss >> cmd;
+    if (iss >> key) {
+        iss >> value;  // This might be empty for some commands
+    }
+
+    // Convert command to uppercase for consistency
+    for (char& c : cmd) {
+        c = std::toupper(c);
+    }
+
+    return {cmd, key, value};
+}
+
+void RedisServer::send_command(int client_fd, const std::string& response) {
+    if (send(client_fd, response.c_str(), response.size(), 0) < 0) {
+        throw std::runtime_error("Error sending response: " + std::string(strerror(errno)));
+    }
 }
 
 }  // namespace network

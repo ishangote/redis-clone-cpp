@@ -57,9 +57,10 @@ redis-clone-cpp/
   - String values support
   - GET/SET/DEL/EXISTS operations
 - **Network Layer**: TCP server implementation
-  - Redis protocol (RESP) support
-  - Basic command handling
+  - Persistent client connections
+  - Basic command handling (GET/SET/DEL/EXISTS/QUIT)
   - Signal handling for graceful shutdown
+  - Structured command parsing
 
 ### Planned Components
 - **Data Structures**: Redis-like data structure support
@@ -106,12 +107,46 @@ cd redis-clone-cpp
 # Run all tests
 ./scripts/test.sh
 
-# Run specific test
-./scripts/test.sh storage_tests
+# Run specific test components
+./scripts/test.sh network_test     # Run network tests
+./scripts/test.sh database_test    # Run storage tests
 
 # Run tests without rebuilding
-./scripts/test.sh --no-build storage_tests
+./scripts/test.sh --no-build network_test
 ```
+
+### Running the Server
+```bash
+# Build and start the server (default port 6379)
+./scripts/build.sh
+./build/bin/redis-clone-cpp
+
+# Or specify a custom port
+./build/bin/redis-clone-cpp 8080
+
+# Or use environment variable
+REDIS_CLONE_PORT=9000 ./build/bin/redis-clone-cpp
+```
+
+### Testing with netcat
+Once the server is running, you can test it manually using netcat:
+
+```bash
+# In another terminal, connect to the server
+nc localhost 6379
+
+# Try some commands (connection stays open):
+SET name john
+GET name
+SET age 25
+GET age
+DEL name
+EXISTS name
+EXISTS age
+QUIT    # Gracefully close the connection
+```
+
+The server now maintains persistent connections and supports the QUIT command for clean disconnection.
 
 ## Development Workflow
 

@@ -27,6 +27,12 @@ class RedisServer {
     RedisServer& operator=(const RedisServer&) = delete;
 
    private:
+    struct CommandParts {
+        std::string command;
+        std::string key;
+        std::string value;
+    };
+
     int port_;
     int server_fd_;  // Server socket file descriptor
     redis_clone::storage::Database db_;
@@ -49,6 +55,20 @@ class RedisServer {
      * @throws std::runtime_error if initialization fails
      */
     void initialize_server();
+
+    /**
+     * @brief Extracts command parts from input string
+     * @param input The raw command string
+     * @return CommandParts struct with parsed command, key, and value
+     */
+    CommandParts extract_command(const std::string& input);
+
+    /**
+     * @brief Sends response to client
+     * @param client_fd Client socket file descriptor
+     * @param response Response string to send
+     */
+    void send_command(int client_fd, const std::string& response);
 };
 
 }  // namespace network
