@@ -1,15 +1,21 @@
 # Redis Clone in C++
 
-A from-scratch implementation of Redis to understand distributed systems concepts, in-memory databases, and concurrent programming fundamentals.
+A from-scratch implementation of Redis featuring **dual server architectures** for comprehensive distributed systems learning. This project demonstrates both event-driven and multi-threaded approaches to high-performance server design.
 
 ## Project Overview
 
-This project aims to recreate Redis's core functionality to gain deep insights into:
-- In-memory database systems
-- Distributed system concepts
-- Network programming
-- Concurrent data structures
-- High-performance I/O
+This project recreates Redis's core functionality with **two distinct server architectures** to provide deep insights into:
+- **Event-driven programming** with I/O multiplexing (select/poll)
+- **Multi-threaded server design** with synchronization challenges  
+- **Distributed system concepts** and concurrent programming patterns
+- **Network programming** and protocol implementation
+- **High-performance I/O** and memory management
+
+### Key Educational Features
+- **Side-by-side comparison** of event-driven vs multi-threaded architectures
+- **Command-line mode selection** for easy switching between implementations
+- **Production-quality** buffer management and protocol handling
+- **Comprehensive documentation** of design decisions and trade-offs
 
 ## Project Structure
 
@@ -20,6 +26,7 @@ redis-clone-cpp/
 │   ├── Dependencies.cmake  # External dependency management
 │   └── TestHelper.cmake   # Test configuration helpers
 ├── src/                   # Source code
+│   ├── main.cpp          # Entry point with command-line parsing
 │   ├── CMakeLists.txt    # Source build configuration
 │   ├── storage/          # Storage engine implementation
 │   │   ├── CMakeLists.txt
@@ -32,9 +39,11 @@ redis-clone-cpp/
 │       ├── CMakeLists.txt
 │       ├── include/     # Public headers
 │       │   └── network/
-│       │       └── server.h
+│       │       ├── server.h      # Both server architectures
+│       │       └── redis_utils.h # Shared protocol utilities
 │       └── src/        # Implementation files
-│           └── server.cpp
+│           ├── server.cpp      # Server implementations
+│           └── redis_utils.cpp # Shared utilities
 ├── test/                # Test files
 │   ├── CMakeLists.txt  # Test configuration
 │   └── unit/           # Unit tests
@@ -49,23 +58,61 @@ redis-clone-cpp/
     └── test.sh        # Test runner script
 ```
 
+## Server Architectures
+
+### 🚀 Event-Driven Server (Default) - `RedisServerEventLoop`
+**Production-style architecture** using I/O multiplexing for handling multiple clients:
+
+- **Single-threaded** event loop with `select()` system call
+- **Non-blocking I/O** operations (MSG_DONTWAIT)
+- **Client state management** with per-client read/write buffers
+- **Memory efficient** - no thread overhead per connection
+- **Scalable** to thousands of concurrent connections
+
+**Best for**: Learning modern server architectures, understanding event loops, and high-concurrency scenarios.
+
+### 🧵 Multi-Threaded Server (Educational) - `RedisServer`
+**Traditional thread-per-client architecture** for understanding threading concepts:
+
+- **One thread per client** connection model
+- **Thread-safe database** operations with mutex synchronization
+- **Signal handling** in worker threads
+- **Resource isolation** per client connection
+- **Simpler logic** but higher memory overhead
+
+**Best for**: Understanding threading, synchronization challenges, and resource management.
+
 ## Components
 
 ### Current Implementation
+- **Dual Server Architectures**: 
+  - **Event-driven** (default): Single-threaded with I/O multiplexing using `select()`
+  - **Multi-threaded** (educational): Thread-per-client with mutex synchronization
+  
+- **Command-Line Interface**:
+  - **Mode selection**: `--mode=eventloop|threaded` 
+  - **Port configuration**: `--port=<number>` (default: 6379)
+  - **Help system**: `-h, --help` for usage information
+  - **Backward compatibility**: Supports legacy positional arguments
+
 - **Storage Engine**: Thread-safe key-value storage implementation
-  - In-memory key-value store using std::unordered_map
-  - String values support
-  - GET/SET/DEL/EXISTS operations
-  - Thread-safe database operations with mutex protection
-- **Network Layer**: Multi-threaded TCP server with robust command processing
-  - **Multi-threading**: Concurrent client connections (one thread per client)
-  - **Buffer Management**: NEW - Robust handling of partial command reception across multiple recv() calls
-  - **Command Processing**: NEW - Complete command accumulation until proper terminators (\r\n or \n)
-  - **Thread Safety**: Mutex-protected database operations for concurrent access
-  - **Signal Handling**: Proper signal blocking in worker threads for graceful shutdown
-  - **Connection Management**: Persistent client connections with proper cleanup on disconnection
-  - **Error Handling**: Robust error handling for network failures and client disconnections
-  - **Redis Protocol**: Basic RESP (Redis Serialization Protocol) response formatting
+  - In-memory key-value store using `std::unordered_map`
+  - String values support with GET/SET/DEL/EXISTS operations
+  - Thread-safe database operations (multi-threaded mode)
+  - Template-based storage abstraction (event-loop mode)
+
+- **Network Layer**: Production-quality TCP server with robust protocol handling
+  - **Redis Protocol (RESP)**: Complete command parsing and response formatting
+  - **Buffer Management**: Handles partial commands across multiple `recv()` calls
+  - **Command Processing**: Flexible termination handling (`\r\n` and `\n`)
+  - **Connection Management**: Graceful client disconnection and cleanup
+  - **Error Handling**: Comprehensive error responses and network failure recovery
+
+- **Shared Utilities**: `redis_utils` module for protocol consistency
+  - **Command parsing**: Structured command extraction (`CommandParts`)
+  - **Template specialization**: Support for different storage backends
+  - **Protocol compliance**: RESP format responses for all commands
+  - **Code reuse**: Shared logic between both server architectures
 
 ### Planned Components
 - **Data Structures**: Redis-like data structure support
@@ -121,33 +168,66 @@ cd redis-clone-cpp
 ```
 
 ### Running the Server
+
+#### Quick Start
 ```bash
-# Build and start the server (default port 6379)
+# Build the project
 ./scripts/build.sh
+
+# Start with default settings (Event-driven server on port 6379)
 ./build/bin/redis-clone-cpp
 
-# Or specify a custom port
-./build/bin/redis-clone-cpp 8080
+# Expected output:
+# Redis Clone Server v0.1.0
+# Mode: Event Loop
+# Port: 6379
+# PID: 12345
+# --------------------------------
+# Event loop server ready to accept connections
+```
 
-# Or use environment variable
-REDIS_CLONE_PORT=9000 ./build/bin/redis-clone-cpp
+#### Server Mode Selection
+```bash
+# Event-driven server (default) - recommended for learning modern architectures
+./build/bin/redis-clone-cpp --mode=eventloop
+
+# Multi-threaded server - educational comparison
+./build/bin/redis-clone-cpp --mode=threaded
+
+# Custom port
+./build/bin/redis-clone-cpp --mode=eventloop --port=8080
+
+# Using environment variable
+REDIS_CLONE_PORT=9000 ./build/bin/redis-clone-cpp --mode=threaded
+```
+
+#### Help and Usage
+```bash
+# Display all options
+./build/bin/redis-clone-cpp --help
+
+# Output:
+# Usage: ./build/bin/redis-clone-cpp [OPTIONS]
+# Options:
+#   --mode=<type>     Server mode: 'eventloop' (default) or 'threaded'
+#   --port=<number>   Port number (default: 6379)
+#   -h, --help        Show this help message
+#
+# Examples:
+#   ./build/bin/redis-clone-cpp                    # Event loop server on port 6379
+#   ./build/bin/redis-clone-cpp --mode=threaded    # Multi-threaded server
+#   ./build/bin/redis-clone-cpp --port=8080        # Custom port
 ```
 
 ### Testing with netcat
-Once the server is running, you can test it manually using netcat:
+
+Once the server is running, you can test it using netcat:
 
 ```bash
-# Connect multiple clients simultaneously
-# Terminal 1:
+# Connect to server
 nc localhost 6379
 
-# Terminal 2 (concurrent connection):
-nc localhost 6379
-
-# Terminal 3 (another concurrent connection):
-nc localhost 6379
-
-# Each client can send commands independently:
+# Send commands manually:
 SET name john
 GET name
 SET age 25
@@ -158,69 +238,164 @@ EXISTS age
 QUIT    # Gracefully close the connection
 ```
 
-The server supports **multiple concurrent clients** with thread-safe operations and **NEW: production-quality buffer management**. Recent improvements include:
+#### Testing Multiple Concurrent Connections
+You can test both server architectures with multiple simultaneous connections:
 
-- **Buffer Management**: NEW - Handles partial commands that don't arrive in a single network packet
-- **Command Boundary Detection**: NEW - Properly detects complete commands using \r\n or \n terminators
-- **Partial Command Accumulation**: NEW - Accumulates command data across multiple recv() calls until complete
+```bash
+# Terminal 1: Start event-driven server
+./build/bin/redis-clone-cpp --mode=eventloop
 
-Existing features:
-- **Concurrent Connections**: Each client runs in its own thread, allowing unlimited simultaneous connections
-- **Thread Safety**: All database operations are protected with mutexes to prevent race conditions
-- **Graceful Disconnection**: Proper cleanup when clients disconnect unexpectedly
-- **Signal Handling**: Worker threads block signals to ensure proper shutdown behavior
+# Terminal 2-4: Connect multiple clients simultaneously
+nc localhost 6379  # Each terminal can send commands independently
 
-Commands can be sent independently by each client without affecting others:
+# Example commands in each terminal:
+# Terminal 2: SET user1 alice
+# Terminal 3: SET user2 bob  
+# Terminal 4: GET user1
 
-## Architecture & Design
-
-### Multi-threaded Server Architecture
-The server implements a **one-thread-per-client** model with the following design:
-
-```
-Main Thread                    Worker Threads
-     |                              |
-┌────▼────┐                  ┌─────▼─────┐
-│ Accept  │                  │  Client   │
-│ Loop    │────────────────▶ │  Handler  │
-│         │                  │  Thread   │
-└─────────┘                  └───────────┘
-                                    │
-                               ┌────▼────┐
-                               │ Command │
-                               │ Buffer  │◄─── recv() calls
-                               │ Manager │
-                               └─────────┘
-                                    │
-                               ┌────▼────┐
-                               │Database │◄─── Mutex protected
-                               │Operations│
-                               └─────────┘
+# Then test multi-threaded mode:
+./build/bin/redis-clone-cpp --mode=threaded
+# Connect same number of clients and observe behavior
 ```
 
-### Buffer Management (NEW)
-A critical networking challenge recently solved in this implementation:
+## Architecture Comparison & Design
 
-**Problem**: TCP doesn't guarantee that a complete command arrives in a single `recv()` call. Large commands or network conditions can cause partial reception, leading to parsing failures.
+### Event-Driven vs Multi-Threaded: A Learning Comparison
 
-**Example**: Command `"SET username john_doe_with_a_long_name"` might arrive as:
-- recv() call 1: `"SET username john_doe_with_a_lo"`
-- recv() call 2: `"ng_name"`
+Both server architectures implement the same Redis protocol but use fundamentally different approaches to concurrency:
 
-**Solution**: Command buffer accumulation with terminator detection:
-1. **Persistent Buffer**: Maintain `std::string command_buffer` per client connection
-2. **Data Accumulation**: Append all recv() data to buffer using `command_buffer.append()`
-3. **Boundary Detection**: Scan for complete commands ending with \n or \r\n using `find('\n')`
-4. **Command Extraction**: Extract complete commands with `substr()` and remove with `erase()`
-5. **Partial Preservation**: Keep incomplete command data for next recv() cycle
+| Aspect | Event-Driven (`eventloop`) | Multi-Threaded (`threaded`) |
+|--------|------------------------------|------------------------------|
+| **Concurrency Model** | Single thread + I/O multiplexing | One thread per client |
+| **Resource Usage** | Low memory, single thread | Higher memory, N threads |
+| **Scalability** | Handles thousands of clients | Limited by thread overhead |
+| **Complexity** | Complex state management | Simpler per-client logic |
+| **Debugging** | Single-threaded debugging | Multi-threaded race conditions |
+| **Best Use Case** | High-concurrency production | Educational/simple scenarios |
 
-**Testing**: Verified by reducing buffer size to 30 bytes to simulate partial reception scenarios.
+### Event-Driven Server Architecture (`RedisServerEventLoop`)
 
-### Thread Safety Model
-- **Database Layer**: Protected by `std::mutex` with RAII (`std::lock_guard`)
-- **Worker Threads**: Independent per-client threads with signal blocking
-- **Main Thread**: Handles accept() loop and signal management
-- **Memory Safety**: Automatic cleanup on client disconnection
+```
+Event Loop (Single Thread)
+┌─────────────────────────────────────────────────────────────┐
+│                    select() System Call                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
+│  │   Client    │  │   Client    │  │   Client    │          │
+│  │   Socket    │  │   Socket    │  │   Socket    │   ...    │
+│  │     #3      │  │     #4      │  │     #5      │          │
+│  └─────────────┘  └─────────────┘  └─────────────┘          │
+│         │                 │                 │               │
+│  ┌──────▼──────┐  ┌─────▼─────┐   ┌─────▼─────┐             │
+│  │ Read Buffer │  │Read Buffer│   │Read Buffer│             │
+│  │Write Buffer │  │Write Buffer│  │Write Buffer│             │
+│  └─────────────┘  └───────────┘   └───────────┘             │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │             Shared Data Store                           ││
+│  │         std::unordered_map<string, string>              ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Benefits:**
+- **Memory Efficient**: No thread stack overhead per client
+- **Cache Friendly**: Single thread uses CPU cache effectively  
+- **No Locks Needed**: No synchronization primitives required
+- **Predictable Performance**: No context switching overhead
+
+### Multi-Threaded Server Architecture (`RedisServer`)
+
+```
+Main Thread                     Worker Threads
+     │                               │
+┌────▼────┐                   ┌──────▼──────┐
+│ Accept  │                   │   Client    │
+│  Loop   │─────────────────▶ │   Handler   │
+│         │                   │   Thread    │
+└─────────┘                   └─────────────┘
+                                     │
+                              ┌──────▼──────┐
+                              │   Command   │
+                              │   Buffer    │◄─── recv() calls
+                              │   Manager   │
+                              └─────────────┘
+                                     │
+                              ┌──────▼──────┐
+                              │  Database   │◄─── Mutex protected
+                              │ Operations  │     std::lock_guard
+                              └─────────────┘
+```
+
+**Key Benefits:**
+- **Simple Logic**: Each client handled independently
+- **Isolation**: Client failures don't affect others
+- **Familiar Model**: Traditional threading approach
+- **Educational Value**: Demonstrates synchronization challenges
+
+### Shared Protocol Implementation (`redis_utils`)
+
+Both architectures use the same protocol handling code for consistency:
+
+```cpp
+// Shared command parsing
+struct CommandParts {
+    std::string command;  // "SET", "GET", etc.
+    std::string key;      // Key name
+    std::string value;    // Value (for SET)
+};
+
+// Template-based processing for different storage types
+template<typename DataStore>
+std::string process_command_with_store(const CommandParts& parts, DataStore& data);
+```
+
+This design enables:
+- **Code Reuse**: Same protocol logic across architectures
+- **Consistency**: Identical command behavior in both modes
+- **Maintainability**: Single source of truth for Redis protocol
+- **Testing**: Compare architectures with identical functionality
+
+### Production-Quality Buffer Management
+
+A critical networking challenge solved in both server implementations:
+
+**The Problem**: TCP doesn't guarantee that complete commands arrive in a single `recv()` call. Network conditions and command size can cause **partial command reception**.
+
+**Example Scenario**:
+```bash
+# Large command might arrive fragmented:
+Command: "SET user:12345:profile:data some_very_long_value_that_spans_multiple_packets"
+
+# recv() call 1: "SET user:12345:profile:data some_very_lo"
+# recv() call 2: "ng_value_that_spans_multiple_packets"
+```
+
+**Robust Solution Implemented**:
+1. **Persistent Buffers**: Maintain `std::string read_buffer` per client
+2. **Data Accumulation**: Append all `recv()` data: `read_buffer.append(buffer, bytes_read)`
+3. **Boundary Detection**: Scan for complete commands: `buffer.find('\n')`  
+4. **Command Extraction**: Extract complete commands and preserve partial data
+5. **Flexible Terminators**: Handle both `\r\n` (Redis standard) and `\n` (telnet/netcat)
+
+**Code Example**:
+```cpp
+// Both architectures use this pattern
+while ((pos = read_buffer.find('\n')) != std::string::npos) {
+    std::string complete_command = read_buffer.substr(0, pos);
+    read_buffer.erase(0, pos + 1);  // Remove processed command
+    
+    // Remove \r if present (\r\n handling)
+    if (!complete_command.empty() && complete_command.back() == '\r') {
+        complete_command.pop_back();
+    }
+    
+    // Process complete command
+    process_command(complete_command);
+}
+// Partial commands remain in buffer for next recv() cycle
+```
+
+**Testing Verification**: Simulated partial reception by reducing buffer sizes to force command fragmentation across multiple network calls.
 
 ## Development Workflow
 
@@ -247,29 +422,78 @@ A critical networking challenge recently solved in this implementation:
 - Database system internals
 
 ### Technical Goals
-1. ✅ **Basic Redis Commands**
-   - GET/SET/DEL/EXISTS operations
-   - Basic string value support
-   - Error handling and validation
-2. ✅ **Networking**
-   - Multi-threaded TCP server implementation
-   - Concurrent client connection handling
-   - Basic Redis protocol (RESP) response formatting
-   - NEW: Production-quality buffer management for partial commands
-   - Thread-safe client-server communication
-3. 🚧 **Advanced Features** (Planned)
-   - Full Redis protocol (RESP) parsing
+
+1. ✅ **Dual Server Architectures**
+   - Event-driven server with I/O multiplexing (`select()`)
+   - Multi-threaded server with thread-per-client model
+   - Command-line mode selection and configuration
+   - Production-quality buffer management for both architectures
+
+2. ✅ **Redis Protocol Implementation**
+   - RESP (Redis Serialization Protocol) compliance
+   - GET/SET/DEL/EXISTS operations with proper error handling
+   - Flexible command termination (`\r\n` and `\n`)
+   - Shared protocol utilities for code consistency
+
+3. ✅ **Production-Quality Networking**
+   - Robust partial command handling across multiple `recv()` calls
+   - Graceful client connection management and cleanup
+   - Signal handling and graceful shutdown procedures
+   - Thread-safe database operations (multi-threaded mode)
+
+4. 🚧 **Advanced Features** (Planned)
+   - Additional Redis commands (INCR, DECR, APPEND, etc.)
    - Data structure operations (Lists, Sets, Hashes)
-   - Replication and clustering
-   - Persistence (RDB snapshots, AOF)
+   - Persistence mechanisms (RDB snapshots, AOF)
+   - Basic replication (master-slave)
+
+## Learning Outcomes
+
+This project provides hands-on experience with:
+
+### Distributed Systems Concepts
+- **Concurrency Models**: Event-driven vs multi-threaded approaches
+- **I/O Multiplexing**: Understanding `select()`, `poll()`, and event loops
+- **Resource Management**: Memory usage patterns and scalability trade-offs
+- **Performance Analysis**: Comparing architectures under different loads
+
+### Systems Programming
+- **Network Programming**: TCP sockets, partial reads, connection management  
+- **Protocol Implementation**: RESP parsing and response formatting
+- **Signal Handling**: Graceful shutdown in multi-threaded environments
+- **Buffer Management**: Production-quality data handling across network calls
+
+### Software Architecture
+- **Modular Design**: Clean separation of concerns (networking, storage, protocol)
+- **Template Programming**: Generic interfaces for different storage backends
+- **Code Reuse**: Shared utilities across different architectures
+- **API Design**: Command-line interfaces and configuration management
 
 ## Contributing
 
-This is a learning project but contributions are welcome! Please feel free to:
-- Report bugs
-- Suggest features
-- Submit pull requests
+This is primarily a learning project, but contributions are welcome! Areas of interest:
+
+### Immediate Opportunities
+- **Performance Benchmarking**: Add tools to compare architecture performance
+- **Additional Commands**: Implement more Redis commands (INCR, APPEND, etc.)
+- **Protocol Enhancements**: Support for Redis pipelining
+- **Testing**: Expand test coverage for edge cases
+
+### Advanced Features
+- **Persistence**: Add RDB or AOF persistence mechanisms
+- **Replication**: Implement basic master-slave replication
+- **Clustering**: Explore Redis cluster concepts
+- **Monitoring**: Add metrics and observability features
+
+Please feel free to:
+- Report bugs or unexpected behavior
+- Suggest architectural improvements
+- Submit pull requests with enhancements
+- Share performance analysis or benchmarks
 
 ## Acknowledgments
 
-- Redis for inspiration
+- **Redis** for the inspiration and protocol specification
+- **Stevens' Network Programming** for socket programming concepts
+- **Event-driven programming patterns** from modern server architectures
+- **C++ community** for modern C++ practices and guidelines

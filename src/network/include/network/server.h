@@ -2,7 +2,9 @@
 
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
+#include "network/redis_utils.h"
 #include "storage/database.h"
 
 namespace redis_clone {
@@ -28,12 +30,6 @@ class RedisServer {
     RedisServer& operator=(const RedisServer&) = delete;
 
    private:
-    struct CommandParts {
-        std::string command;
-        std::string key;
-        std::string value;
-    };
-
     int port_;
     int server_fd_;  // Server socket file descriptor
     redis_clone::storage::Database db_;
@@ -59,18 +55,37 @@ class RedisServer {
     void initialize_server();
 
     /**
-     * @brief Extracts command parts from input string
-     * @param input The raw command string
-     * @return CommandParts struct with parsed command, key, and value
-     */
-    CommandParts extract_command(const std::string& input);
-
-    /**
      * @brief Sends response to client
      * @param client_fd Client socket file descriptor
      * @param response Response string to send
      */
     void send_command(int client_fd, const std::string& response);
+};
+
+class RedisServerEventLoop {
+   private:
+    int server_fd_;
+    std::unordered_map<std::string, std::string> data_;
+
+    struct ClientState {
+        int fd;
+        std::string read_buffer;         // Accumulate incoming data
+        std::string write_buffer;        // Queue outgoing responses
+        bool should_disconnect = false;  // Flag for graceful disconnection
+    };
+
+    std::unordered_map<int, ClientState> clients_;  // fd -> client state
+
+   public:
+    RedisServerEventLoop(int port);
+    void run();  // Main event loop
+
+   private:
+    void accept_new_connections();
+    void handle_client_data(int client_fd);
+    void process_complete_commands(int client_fd);
+    void send_pending_response();
+    std::string process_command(const std::string& command);
 };
 
 }  // namespace network

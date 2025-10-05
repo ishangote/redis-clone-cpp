@@ -1,6 +1,7 @@
 # Network library configuration
 add_library(network STATIC
     src/server.cpp
+    src/redis_utils.cpp
 )
 
 target_include_directories(network
