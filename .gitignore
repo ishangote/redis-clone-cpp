@@ -104,6 +104,10 @@ dump.rdb
 *.rdb
 *.aof
 
+# Redis Clone specific - persistence data
+data/
+*.json
+
 # Performance testing artifacts
 perf.data
 perf.data.old

@@ -63,6 +63,8 @@ std::string process_command_with_store<std::unordered_map<std::string, std::stri
         return ":" + std::to_string(exists ? 1 : 0) + "\r\n";
     } else if (parts.command == "QUIT") {
         return "+OK\r\n";
+    } else if (parts.command == "BGSAVE") {
+        return "+BGSAVE\r\n";
     }
 
     return "-ERR unknown command '" + parts.command + "'\r\n";

@@ -5,22 +5,43 @@
 #include <pthread.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cctype>
 #include <cerrno>
 #include <csignal>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 #include "network/redis_utils.h"
 
 // Declare the global running flag defined in main.cpp
 extern volatile sig_atomic_t g_running;
+
+// Signal handler for child process cleanup (BGSAVE)
+void handle_child_exit(int sig) {
+    int status;
+    pid_t pid;
+
+    // Clean up all finished child processes (non-blocking)
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFEXITED(status)) {
+            std::cout << "Background save completed (PID: " << pid
+                      << ", exit code: " << WEXITSTATUS(status) << ")" << std::endl;
+        } else {
+            std::cout << "Background save failed (PID: " << pid << ")" << std::endl;
+        }
+    }
+}
 
 namespace redis_clone {
 namespace network {
@@ -191,6 +212,16 @@ void RedisServer::send_command(int client_fd, const std::string& response) {
 }
 
 RedisServerEventLoop::RedisServerEventLoop(int port) : server_fd_(-1) {
+    // Initialize persistence timing
+    server_start_time_ = std::chrono::steady_clock::now();
+    last_save_time_ = server_start_time_;
+
+    // Load existing data if available
+    load_snapshot_from_file();
+
+    // Set up signal handler for child process cleanup
+    signal(SIGCHLD, handle_child_exit);
+
     // Create server socket
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd_ < 0) {
@@ -288,7 +319,21 @@ void RedisServerEventLoop::handle_client_data(int client_fd) {
 
 std::string RedisServerEventLoop::process_command(const std::string& command) {
     redis_utils::CommandParts parts = redis_utils::extract_command(command);
-    return redis_utils::process_command_with_store(parts, data_);
+    std::string response = redis_utils::process_command_with_store(parts, data_);
+
+    if (parts.command == "BGSAVE") {
+        return background_save();
+    }
+
+    // Count changes for persistence (only for successful write operations)
+    if ((response[0] == '+' && response.substr(0, 3) == "+OK") ||
+        (response[0] == ':' && response[1] == '1')) {
+        if (parts.command == "SET" || parts.command == "DEL") {
+            changes_since_save++;
+        }
+    }
+
+    return response;
 }
 
 /**
@@ -356,6 +401,14 @@ void RedisServerEventLoop::run() {
             close(client_fd);
             clients_.erase(client_fd);
         }
+
+        // Check if we need to save a snapshot
+        if (should_save_snapshot()) {
+            background_save_internal();
+            // Reset counters after successful save
+            changes_since_save = 0;
+            last_save_time_ = std::chrono::steady_clock::now();
+        }
     }
 
     // Cleanup on shutdown
@@ -363,6 +416,176 @@ void RedisServerEventLoop::run() {
         close(client_fd);
     }
     close(server_fd_);
+}
+
+bool RedisServerEventLoop::should_save_snapshot() {
+    auto now = std::chrono::steady_clock::now();
+    auto seconds_since_last_save =
+        std::chrono::duration_cast<std::chrono::seconds>(now - last_save_time_).count();
+
+    // Redis-style save conditions: save <seconds> <changes>
+    // save 900 1    - Save if at least 1 key changed in 900 seconds (15 min)
+    // save 300 10   - Save if at least 10 keys changed in 300 seconds (5 min)
+    // save 60 10000 - Save if at least 10000 keys changed in 60 seconds (1 min)
+
+    if (seconds_since_last_save >= 900 && changes_since_save > 1) {
+        return true;  // 15 minutes + 1 change
+    }
+
+    if (seconds_since_last_save >= 300 && changes_since_save >= 10) {
+        return true;  // 5 minutes + 10 changes
+    }
+
+    if (seconds_since_last_save >= 60 && changes_since_save >= 10000) {
+        return true;  // 1 minute + 10000 changes
+    }
+
+    return false;  // No save conditions met
+}
+
+void RedisServerEventLoop::save_snapshot_to_file() {
+    const std::string temp_file = "data/dump.json.tmp";
+    const std::string final_file = "data/dump.json";
+
+    // Step 1: Write to temporary file
+    std::ofstream file(temp_file);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open " << temp_file << " for writing" << std::endl;
+        return;
+    }
+
+    // Get current timestamp
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto tm = *std::gmtime(&time_t);
+
+    // Start JSON object
+    file << "{\n";
+    file << "  \"metadata\": {\n";
+    file << "    \"version\": \"1.0\",\n";
+
+    // Format timestamp (ISO 8601)
+    file << "    \"timestamp\": \"";
+    file << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    file << "\",\n";
+
+    file << "    \"key_count\": " << data_.size() << "\n";
+    file << "  },\n";
+    file << "  \"data\": {\n";
+
+    // Write key-value pairs
+    bool first = true;
+    for (const auto& [key, value] : data_) {
+        if (!first) {
+            file << ",\n";
+        }
+        file << "    \"" << key << "\": \"" << value << "\"";
+        first = false;
+    }
+
+    file << "\n  }\n";
+    file << "}\n";
+
+    // Step 2: Ensure data is written to disk
+    file.flush();
+    file.close();
+
+    // Step 3: Atomic rename (this operation is atomic on most filesystems)
+    if (std::rename(temp_file.c_str(), final_file.c_str()) != 0) {
+        std::cerr << "Error: Failed to rename " << temp_file << " to " << final_file << std::endl;
+        std::remove(temp_file.c_str());  // Clean up temp file on failure
+        return;
+    }
+
+    std::cout << "Snapshot saved atomically: " << data_.size() << " keys written to " << final_file
+              << std::endl;
+}
+
+void RedisServerEventLoop::load_snapshot_from_file() {
+    std::ifstream file("data/dump.json");
+    if (!file.is_open()) {
+        std::cout << "No existing snapshot found, starting with empty database" << std::endl;
+        return;
+    }
+
+    std::string line;
+    bool in_data_section = false;
+    int loaded_count = 0;
+
+    while (std::getline(file, line)) {
+        // Look for the start of data section
+        if (line.find("\"data\":") != std::string::npos) {
+            in_data_section = true;
+            continue;
+        }
+
+        // Skip until we're in data section
+        if (!in_data_section) {
+            continue;
+        }
+
+        // End of data section
+        if (line.find("}") != std::string::npos && line.find("\"") == std::string::npos) {
+            break;
+        }
+
+        // Parse key-value line: "key1": "value1",
+        size_t key_start = line.find("\"");
+        if (key_start == std::string::npos) continue;
+
+        size_t key_end = line.find("\"", key_start + 1);
+        if (key_end == std::string::npos) continue;
+
+        size_t value_start = line.find("\"", key_end + 1);
+        if (value_start == std::string::npos) continue;
+
+        size_t value_end = line.find("\"", value_start + 1);
+        if (value_end == std::string::npos) continue;
+
+        // Extract key and value
+        std::string key = line.substr(key_start + 1, key_end - key_start - 1);
+        std::string value = line.substr(value_start + 1, value_end - value_start - 1);
+
+        // Add to data map
+        data_[key] = value;
+        loaded_count++;
+    }
+
+    file.close();
+    std::cout << "Loaded " << loaded_count << " keys from snapshot" << std::endl;
+}
+
+std::string RedisServerEventLoop::background_save() {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // Child process
+        save_snapshot_to_file();
+        exit(0);
+    } else if (pid > 0) {
+        // Parent process
+        std::cout << "Background save started (PID: " << pid << ")" << std::endl;
+        return "+Background saving started\r\n";
+    } else {
+        // Fork failed
+        return "-ERR Background save failed\r\n";
+    }
+}
+
+void RedisServerEventLoop::background_save_internal() {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // Child process - save and exit
+        save_snapshot_to_file();
+        exit(0);
+    } else if (pid > 0) {
+        // Parent process - log and continue
+        std::cout << "Automatic background save started (PID: " << pid << ")" << std::endl;
+    } else {
+        // Fork failed - log error but don't crash server
+        std::cerr << "Failed to fork for automatic save: " << strerror(errno) << std::endl;
+    }
 }
 
 }  // namespace network

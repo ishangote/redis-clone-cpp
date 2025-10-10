@@ -66,6 +66,9 @@ class RedisServerEventLoop {
    private:
     int server_fd_;
     std::unordered_map<std::string, std::string> data_;
+    int changes_since_save = 0;
+    std::chrono::steady_clock::time_point last_save_time_;
+    std::chrono::steady_clock::time_point server_start_time_;
 
     struct ClientState {
         int fd;
@@ -86,6 +89,11 @@ class RedisServerEventLoop {
     void process_complete_commands(int client_fd);
     void send_pending_response();
     std::string process_command(const std::string& command);
+    bool should_save_snapshot();      // Check Redis-style save conditions
+    void save_snapshot_to_file();     // Save data_ to JSON file
+    std::string background_save();    // Background save for BGSAVE command
+    void background_save_internal();  // Background save for automatic triggers
+    void load_snapshot_from_file();   // Load JSON file into data_
 };
 
 }  // namespace network
