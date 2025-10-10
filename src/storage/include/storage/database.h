@@ -6,6 +6,12 @@
 namespace redis_clone {
 namespace storage {
 
+/**
+ * Simple key-value database layer
+ *
+ * Used by the threaded server implementation to demonstrate
+ * separation between storage and networking layers.
+ */
 class Database {
    public:
     void set(const std::string& key, const std::string& value);

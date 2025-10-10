@@ -6,6 +6,7 @@
 #include <string>
 
 #include "network/server.h"
+#include "network/threaded_server.h"
 
 // Global variable for signal handling
 volatile sig_atomic_t g_running = 1;
@@ -121,11 +122,11 @@ int main(int argc, char* argv[]) {
                   << "--------------------------------\n";
 
         if (config.mode == ServerMode::EVENT_LOOP) {
-            redis_clone::network::RedisServerEventLoop server(config.port);
+            redis_clone::network::RedisServer server(config.port);
             std::cout << "Event loop server ready to accept connections\n";
             server.run();
         } else {
-            redis_clone::network::RedisServer server(config.port);
+            redis_clone::network::ThreadedRedisServer server(config.port);
             std::cout << "Multi-threaded server ready to accept connections\n";
             server.run();
         }
