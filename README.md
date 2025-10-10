@@ -1,18 +1,23 @@
 # Redis Clone in C++
 
-A from-scratch implementation of Redis featuring **dual server architectures** for comprehensive distributed systems learning. This project demonstrates both event-driven and multi-threaded approaches to high-performance server design.
+A from-scratch implementation of Redis featuring **dual server architectures** and **production-grade persistence** for comprehensive distributed systems learning. This project demonstrates event-driven programming, multi-threaded design, and Redis-style data persistence with fork()-based background saves.
 
 ## Project Overview
 
-This project recreates Redis's core functionality with **two distinct server architectures** to provide deep insights into:
+This project recreates Redis's core functionality with **two distinct server architectures** and **complete persistence support** to provide deep insights into:
 - **Event-driven programming** with I/O multiplexing (select/poll)
 - **Multi-threaded server design** with synchronization challenges  
+- **Redis-style persistence** with RDB snapshots and background saves
+- **Process management** with fork() and copy-on-write semantics
 - **Distributed system concepts** and concurrent programming patterns
 - **Network programming** and protocol implementation
 - **High-performance I/O** and memory management
 
 ### Key Educational Features
 - **Side-by-side comparison** of event-driven vs multi-threaded architectures
+- **Production-grade persistence** with automatic and manual snapshots
+- **Process forking** for zero-downtime background saves (BGSAVE)
+- **Redis-style save conditions** (900s+1, 300s+10, 60s+10k changes)
 - **Command-line mode selection** for easy switching between implementations
 - **Production-quality** buffer management and protocol handling
 - **Comprehensive documentation** of design decisions and trade-offs
@@ -60,18 +65,20 @@ redis-clone-cpp/
 
 ## Server Architectures
 
-### 🚀 Event-Driven Server (Default) - `RedisServerEventLoop`
-**Production-style architecture** using I/O multiplexing for handling multiple clients:
+### 🚀 Event-Driven Server (Default) - `RedisServer`
+**Production-style architecture** with persistence support using I/O multiplexing:
 
 - **Single-threaded** event loop with `select()` system call
 - **Non-blocking I/O** operations (MSG_DONTWAIT)
 - **Client state management** with per-client read/write buffers
+- **Redis-style persistence** with automatic and background saves
+- **Process forking** for zero-downtime BGSAVE operations
 - **Memory efficient** - no thread overhead per connection
 - **Scalable** to thousands of concurrent connections
 
-**Best for**: Learning modern server architectures, understanding event loops, and high-concurrency scenarios.
+**Best for**: Learning modern server architectures, understanding event loops, Redis persistence concepts, and high-concurrency scenarios.
 
-### 🧵 Multi-Threaded Server (Educational) - `RedisServer`
+### 🧵 Multi-Threaded Server (Educational) - `ThreadedRedisServer`
 **Traditional thread-per-client architecture** for understanding threading concepts:
 
 - **One thread per client** connection model
@@ -79,6 +86,7 @@ redis-clone-cpp/
 - **Signal handling** in worker threads
 - **Resource isolation** per client connection
 - **Simpler logic** but higher memory overhead
+- **Storage layer abstraction** for educational comparison
 
 **Best for**: Understanding threading, synchronization challenges, and resource management.
 
@@ -86,9 +94,17 @@ redis-clone-cpp/
 
 ### Current Implementation
 - **Dual Server Architectures**: 
-  - **Event-driven** (default): Single-threaded with I/O multiplexing using `select()`
-  - **Multi-threaded** (educational): Thread-per-client with mutex synchronization
+  - **Event-driven** (default): Single-threaded with I/O multiplexing using `select()` and persistence support
+  - **Multi-threaded** (educational): Thread-per-client with mutex synchronization and storage abstraction
   
+- **Redis-Style Persistence**:
+  - **Automatic snapshots**: Background saves triggered by Redis-style conditions (900s+1, 300s+10, 60s+10k)
+  - **BGSAVE command**: Manual background saves using fork() for zero-downtime operation
+  - **Startup recovery**: Automatic snapshot loading on server restart
+  - **Atomic file operations**: Temporary file + rename for crash safety
+  - **JSON format**: Human-readable snapshots with metadata (timestamp, key count)
+  - **Process management**: SIGCHLD handling for background save process cleanup
+
 - **Command-Line Interface**:
   - **Mode selection**: `--mode=eventloop|threaded` 
   - **Port configuration**: `--port=<number>` (default: 6379)
@@ -100,6 +116,7 @@ redis-clone-cpp/
   - String values support with GET/SET/DEL/EXISTS operations
   - Thread-safe database operations (multi-threaded mode)
   - Template-based storage abstraction (event-loop mode)
+  - Persistence change tracking for automatic save triggers
 
 - **Network Layer**: Production-quality TCP server with robust protocol handling
   - **Redis Protocol (RESP)**: Complete command parsing and response formatting
@@ -107,6 +124,7 @@ redis-clone-cpp/
   - **Command Processing**: Flexible termination handling (`\r\n` and `\n`)
   - **Connection Management**: Graceful client disconnection and cleanup
   - **Error Handling**: Comprehensive error responses and network failure recovery
+  - **BGSAVE Integration**: Non-blocking background save command support
 
 - **Shared Utilities**: `redis_utils` module for protocol consistency
   - **Command parsing**: Structured command extraction (`CommandParts`)
@@ -115,9 +133,10 @@ redis-clone-cpp/
   - **Code reuse**: Shared logic between both server architectures
 
 ### Planned Components
-- **Data Structures**: Redis-like data structure support
+- **Additional Data Structures**: Redis-like list, set, and hash support
+- **AOF Persistence**: Append-only file logging for maximum durability
+- **Persistence Configuration**: Configurable save conditions and file paths
 - **Replication**: Master-slave replication system
-- **Persistence**: Snapshot and AOF persistence
 
 ## Build System
 
@@ -235,7 +254,44 @@ GET age
 DEL name
 EXISTS name
 EXISTS age
-QUIT    # Gracefully close the connection
+BGSAVE    # Trigger background save
+QUIT      # Gracefully close the connection
+```
+
+#### Testing Persistence Features
+
+Test the persistence functionality to see Redis-style data durability:
+
+```bash
+# Terminal 1: Start server
+./build/bin/redis-clone-cpp
+
+# Terminal 2: Connect and add data
+nc localhost 6379
+SET user:1 alice
+SET user:2 bob
+SET counter 42
+BGSAVE              # Manual background save
+# Observe: "Background save started (PID: xxxxx)" message
+# Wait for: "Background save completed" message
+QUIT
+
+# Terminal 1: Stop server (Ctrl+C)
+# Terminal 1: Restart server
+./build/bin/redis-clone-cpp
+# Observe: "Loaded X keys from snapshot" message
+
+# Terminal 2: Verify data persistence
+nc localhost 6379
+GET user:1          # Should return "alice"
+GET user:2          # Should return "bob"  
+GET counter         # Should return "42"
+
+# Test automatic saves by making many changes:
+SET test1 value1
+SET test2 value2
+# ... add more keys to trigger automatic save conditions
+# Watch for "Automatic background save started" messages
 ```
 
 #### Testing Multiple Concurrent Connections
@@ -271,12 +327,13 @@ Both server architectures implement the same Redis protocol but use fundamentall
 | **Scalability** | Handles thousands of clients | Limited by thread overhead |
 | **Complexity** | Complex state management | Simpler per-client logic |
 | **Debugging** | Single-threaded debugging | Multi-threaded race conditions |
+| **Persistence** | Full Redis-style persistence | Storage layer abstraction only |
 | **Best Use Case** | High-concurrency production | Educational/simple scenarios |
 
-### Event-Driven Server Architecture (`RedisServerEventLoop`)
+### Event-Driven Server Architecture (`RedisServer`)
 
 ```
-Event Loop (Single Thread)
+Event Loop (Single Thread) + Persistence
 ┌─────────────────────────────────────────────────────────────┐
 │                    select() System Call                     │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
@@ -291,8 +348,16 @@ Event Loop (Single Thread)
 │  └─────────────┘  └───────────┘   └───────────┘             │
 │                                                              │
 │  ┌─────────────────────────────────────────────────────────┐│
-│  │             Shared Data Store                           ││
+│  │             Shared Data Store + Persistence             ││
 │  │         std::unordered_map<string, string>              ││
+│  │    Changes: 0   Last Save: T-300s   Conditions:        ││
+│  │    900s+1 | 300s+10 | 60s+10k    ──► Background Save   ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │                 BGSAVE Process                          ││
+│  │    fork() ──► Child Process ──► save_snapshot()         ││
+│  │    Parent continues serving    ──► SIGCHLD cleanup      ││
 │  └─────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -302,8 +367,10 @@ Event Loop (Single Thread)
 - **Cache Friendly**: Single thread uses CPU cache effectively  
 - **No Locks Needed**: No synchronization primitives required
 - **Predictable Performance**: No context switching overhead
+- **Redis-Style Persistence**: Automatic and manual background saves
+- **Zero-Downtime Saves**: fork() enables non-blocking persistence
 
-### Multi-Threaded Server Architecture (`RedisServer`)
+### Multi-Threaded Server Architecture (`ThreadedRedisServer`)
 
 ```
 Main Thread                     Worker Threads
@@ -322,7 +389,8 @@ Main Thread                     Worker Threads
                                      │
                               ┌──────▼──────┐
                               │  Database   │◄─── Mutex protected
-                              │ Operations  │     std::lock_guard
+                              │   Layer     │     std::lock_guard
+                              │ (Storage)   │     (Educational)
                               └─────────────┘
 ```
 
@@ -331,6 +399,137 @@ Main Thread                     Worker Threads
 - **Isolation**: Client failures don't affect others
 - **Familiar Model**: Traditional threading approach
 - **Educational Value**: Demonstrates synchronization challenges
+- **Storage Abstraction**: Clean separation of networking and storage layers
+
+## Redis-Style Persistence Implementation
+
+A comprehensive persistence system that mirrors Redis's RDB snapshot approach:
+
+### Persistence Features
+
+#### 1. **Automatic Background Saves**
+Redis-style save conditions trigger automatic snapshots:
+```cpp
+// Automatic save conditions (matching Redis defaults):
+// save 900 1     - Save if ≥1 change in 900 seconds (15 min)  
+// save 300 10    - Save if ≥10 changes in 300 seconds (5 min)
+// save 60 10000  - Save if ≥10,000 changes in 60 seconds (1 min)
+```
+
+#### 2. **Manual Background Saves (BGSAVE)**
+```bash
+# Client command triggers background save
+BGSAVE
+# Response: "+Background saving started"
+```
+
+#### 3. **Process Forking for Zero-Downtime**
+```cpp
+pid_t pid = fork();
+if (pid == 0) {
+    // Child process: save snapshot and exit
+    save_snapshot_to_file();
+    exit(0);
+} else if (pid > 0) {
+    // Parent process: continue serving clients
+    return "+Background saving started\r\n";
+}
+```
+
+**Benefits of fork() approach:**
+- **Zero downtime**: Server continues accepting connections
+- **Copy-on-write**: Child gets snapshot of data at fork time
+- **Memory efficient**: OS handles memory sharing automatically
+- **Crash safety**: Child process failure doesn't affect server
+
+#### 4. **Atomic File Operations**
+```cpp
+// Write to temporary file first
+std::ofstream file("data/dump.json.tmp");
+// ... write JSON data ...
+file.close();
+
+// Atomic rename (crash-safe)
+std::rename("data/dump.json.tmp", "data/dump.json");
+```
+
+#### 5. **Startup Recovery**
+```cpp
+// Server constructor automatically loads existing snapshot
+load_snapshot_from_file();
+// Output: "Loaded X keys from snapshot"
+```
+
+### Snapshot Format (JSON)
+
+Human-readable JSON format with metadata:
+```json
+{
+  "metadata": {
+    "version": "1.0",
+    "timestamp": "2025-10-10T15:30:45Z",
+    "key_count": 3
+  },
+  "data": {
+    "user:1": "alice", 
+    "user:2": "bob",
+    "counter": "42"
+  }
+}
+```
+
+### Signal Handling and Process Management
+
+Robust child process cleanup prevents zombie processes:
+```cpp
+// SIGCHLD handler reaps background save processes
+void handle_child_exit(int sig) {
+    int status;
+    pid_t pid;
+    
+    // Non-blocking wait for all finished children
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFEXITED(status)) {
+            std::cout << "Background save completed (PID: " << pid << ")" << std::endl;
+        }
+    }
+}
+```
+
+### Change Tracking
+
+Persistence triggers are based on successful write operations:
+```cpp
+// Count changes for automatic save conditions
+if ((response[0] == '+' && response.substr(0, 3) == "+OK") ||
+    (response[0] == ':' && response[1] == '1')) {
+    if (parts.command == "SET" || parts.command == "DEL") {
+        changes_since_save++;
+    }
+}
+```
+
+### File Structure
+```
+data/
+├── dump.json      # Current snapshot
+└── dump.json.tmp  # Temporary file during saves (atomic operation)
+```
+
+Both architectures use the same protocol handling code for consistency:
+
+```cpp
+// Shared command parsing
+struct CommandParts {
+    std::string command;  // "SET", "GET", etc.
+    std::string key;      // Key name
+    std::string value;    // Value (for SET)
+};
+
+// Template-based processing for different storage types
+template<typename DataStore>
+std::string process_command_with_store(const CommandParts& parts, DataStore& data);
+```
 
 ### Shared Protocol Implementation (`redis_utils`)
 
@@ -441,10 +640,18 @@ while ((pos = read_buffer.find('\n')) != std::string::npos) {
    - Signal handling and graceful shutdown procedures
    - Thread-safe database operations (multi-threaded mode)
 
-4. 🚧 **Advanced Features** (Planned)
+4. ✅ **Redis-Style Persistence**
+   - Automatic background saves with Redis-style conditions (900s+1, 300s+10, 60s+10k)
+   - Manual BGSAVE command using fork() for zero-downtime saves
+   - Atomic file operations with temporary files for crash safety
+   - Startup recovery with automatic snapshot loading
+   - SIGCHLD handling for background process cleanup
+   - JSON snapshot format with metadata
+
+5. 🚧 **Advanced Features** (Planned)
    - Additional Redis commands (INCR, DECR, APPEND, etc.)
    - Data structure operations (Lists, Sets, Hashes)
-   - Persistence mechanisms (RDB snapshots, AOF)
+   - AOF (Append-Only File) persistence for maximum durability
    - Basic replication (master-slave)
 
 ## Learning Outcomes
@@ -456,18 +663,23 @@ This project provides hands-on experience with:
 - **I/O Multiplexing**: Understanding `select()`, `poll()`, and event loops
 - **Resource Management**: Memory usage patterns and scalability trade-offs
 - **Performance Analysis**: Comparing architectures under different loads
+- **Data Persistence**: Redis-style RDB snapshots and durability guarantees
+- **Process Management**: fork(), copy-on-write, and background task coordination
 
 ### Systems Programming
 - **Network Programming**: TCP sockets, partial reads, connection management  
 - **Protocol Implementation**: RESP parsing and response formatting
-- **Signal Handling**: Graceful shutdown in multi-threaded environments
+- **Signal Handling**: Graceful shutdown and child process management (SIGCHLD)
 - **Buffer Management**: Production-quality data handling across network calls
+- **File I/O**: Atomic operations, temporary files, and crash safety
+- **Process Control**: fork(), exec(), waitpid(), and zombie prevention
 
 ### Software Architecture
 - **Modular Design**: Clean separation of concerns (networking, storage, protocol)
 - **Template Programming**: Generic interfaces for different storage backends
 - **Code Reuse**: Shared utilities across different architectures
 - **API Design**: Command-line interfaces and configuration management
+- **Persistence Patterns**: Background saves, change tracking, and recovery strategies
 
 ## Contributing
 
@@ -477,10 +689,11 @@ This is primarily a learning project, but contributions are welcome! Areas of in
 - **Performance Benchmarking**: Add tools to compare architecture performance
 - **Additional Commands**: Implement more Redis commands (INCR, APPEND, etc.)
 - **Protocol Enhancements**: Support for Redis pipelining
-- **Testing**: Expand test coverage for edge cases
+- **Testing**: Expand test coverage for edge cases and persistence scenarios
 
 ### Advanced Features
-- **Persistence**: Add RDB or AOF persistence mechanisms
+- **AOF Persistence**: Implement append-only file logging for maximum durability
+- **Persistence Configuration**: Add configurable save conditions and file paths
 - **Replication**: Implement basic master-slave replication
 - **Clustering**: Explore Redis cluster concepts
 - **Monitoring**: Add metrics and observability features
@@ -496,4 +709,6 @@ Please feel free to:
 - **Redis** for the inspiration and protocol specification
 - **Stevens' Network Programming** for socket programming concepts
 - **Event-driven programming patterns** from modern server architectures
+- **Redis Persistence Documentation** for RDB snapshot implementation details
+- **Unix Process Programming** for fork(), signals, and process management
 - **C++ community** for modern C++ practices and guidelines
