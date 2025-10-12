@@ -1,23 +1,26 @@
 # Redis Clone in C++
 
-A from-scratch implementation of Redis featuring **dual server architectures** and **production-grade persistence** for comprehensive distributed systems learning. This project demonstrates event-driven programming, multi-threaded design, and Redis-style data persistence with fork()-based background saves.
+A from-scratch implementation of Redis featuring **dual server architectures** and **production-grade persistence** for comprehensive distributed systems learning. This project demonstrates event-driven programming, multi-threaded design, and complete Redis-style data persistence with both RDB snapshots and AOF (Append-Only File) logging.
 
 ## Project Overview
 
 This project recreates Redis's core functionality with **two distinct server architectures** and **complete persistence support** to provide deep insights into:
 - **Event-driven programming** with I/O multiplexing (select/poll)
 - **Multi-threaded server design** with synchronization challenges  
-- **Redis-style persistence** with RDB snapshots and background saves
-- **Process management** with fork() and copy-on-write semantics
+- **Redis-style persistence** with RDB snapshots and AOF logging
+- **Write-ahead logging** with configurable fsync policies
+- **Background operations** with fork() and copy-on-write semantics
 - **Distributed system concepts** and concurrent programming patterns
 - **Network programming** and protocol implementation
 - **High-performance I/O** and memory management
 
 ### Key Educational Features
 - **Side-by-side comparison** of event-driven vs multi-threaded architectures
-- **Production-grade persistence** with automatic and manual snapshots
-- **Process forking** for zero-downtime background saves (BGSAVE)
-- **Redis-style save conditions** (900s+1, 300s+10, 60s+10k changes)
+- **Complete persistence system** with RDB snapshots and AOF logging
+- **Automatic AOF rewriting** with size-based compaction
+- **Redis-style recovery** with AOF-first precedence
+- **Process forking** for zero-downtime background operations (BGSAVE, BGREWRITEAOF)
+- **Write-ahead logging** with configurable durability policies
 - **Command-line mode selection** for easy switching between implementations
 - **Production-quality** buffer management and protocol handling
 - **Comprehensive documentation** of design decisions and trade-offs
@@ -98,12 +101,15 @@ redis-clone-cpp/
   - **Multi-threaded** (educational): Thread-per-client with mutex synchronization and storage abstraction
   
 - **Redis-Style Persistence**:
-  - **Automatic snapshots**: Background saves triggered by Redis-style conditions (900s+1, 300s+10, 60s+10k)
-  - **BGSAVE command**: Manual background saves using fork() for zero-downtime operation
-  - **Startup recovery**: Automatic snapshot loading on server restart
+  - **RDB snapshots**: Background saves triggered by Redis-style conditions (900s+1, 300s+10, 60s+10k)
+  - **AOF logging**: Write-ahead logging with configurable fsync policies (always, everysec, no)
+  - **BGSAVE command**: Manual background RDB saves using fork() for zero-downtime operation
+  - **BGREWRITEAOF command**: Background AOF compaction to prevent file bloat
+  - **Automatic AOF rewriting**: Size-based triggers (2x growth, 64MB minimum)
+  - **Redis-style recovery**: AOF-first precedence with RDB fallback
+  - **Startup recovery**: Automatic data loading on server restart
   - **Atomic file operations**: Temporary file + rename for crash safety
-  - **JSON format**: Human-readable snapshots with metadata (timestamp, key count)
-  - **Process management**: SIGCHLD handling for background save process cleanup
+  - **Process management**: SIGCHLD handling for background operation cleanup
 
 - **Command-Line Interface**:
   - **Mode selection**: `--mode=eventloop|threaded` 
@@ -134,9 +140,9 @@ redis-clone-cpp/
 
 ### Planned Components
 - **Additional Data Structures**: Redis-like list, set, and hash support
-- **AOF Persistence**: Append-only file logging for maximum durability
-- **Persistence Configuration**: Configurable save conditions and file paths
+- **Persistence Configuration**: Configurable save conditions, AOF policies, and file paths
 - **Replication**: Master-slave replication system
+- **Advanced Features**: TTL support, key expiration, memory optimization
 
 ## Build System
 
@@ -260,7 +266,7 @@ QUIT      # Gracefully close the connection
 
 #### Testing Persistence Features
 
-Test the persistence functionality to see Redis-style data durability:
+Test the complete persistence functionality to see Redis-style data durability:
 
 ```bash
 # Terminal 1: Start server
@@ -271,27 +277,39 @@ nc localhost 6379
 SET user:1 alice
 SET user:2 bob
 SET counter 42
-BGSAVE              # Manual background save
+BGSAVE              # Manual RDB snapshot
 # Observe: "Background save started (PID: xxxxx)" message
 # Wait for: "Background save completed" message
+
+# Test AOF logging (all write commands are logged)
+SET session:123 active
+DEL user:2
+SET temp data
+
+# Test AOF rewrite
+BGREWRITEAOF        # Manual AOF compaction
+# Observe: "AOF rewrite started (PID: xxxxx)" message
+
 QUIT
 
 # Terminal 1: Stop server (Ctrl+C)
 # Terminal 1: Restart server
 ./build/bin/redis-clone-cpp
-# Observe: "Loaded X keys from snapshot" message
+# Observe: "Loading data from AOF file..." (AOF takes precedence)
+# Or: "Loading data from RDB snapshot..." (if no AOF available)
 
 # Terminal 2: Verify data persistence
 nc localhost 6379
 GET user:1          # Should return "alice"
-GET user:2          # Should return "bob"  
+GET session:123     # Should return "active"
+EXISTS user:2       # Should return "0" (was deleted)
 GET counter         # Should return "42"
 
-# Test automatic saves by making many changes:
+# Test automatic AOF rewriting by making many changes:
 SET test1 value1
 SET test2 value2
-# ... add more keys to trigger automatic save conditions
-# Watch for "Automatic background save started" messages
+# ... continue adding keys to trigger size-based rewrite
+# Watch for "AOF file grew too large, triggering background rewrite..." message
 ```
 
 #### Testing Multiple Concurrent Connections
@@ -403,11 +421,11 @@ Main Thread                     Worker Threads
 
 ## Redis-Style Persistence Implementation
 
-A comprehensive persistence system that mirrors Redis's RDB snapshot approach:
+A comprehensive persistence system that mirrors Redis's dual persistence approach with both RDB snapshots and AOF (Append-Only File) logging:
 
 ### Persistence Features
 
-#### 1. **Automatic Background Saves**
+#### 1. **RDB Snapshots (Point-in-Time)**
 Redis-style save conditions trigger automatic snapshots:
 ```cpp
 // Automatic save conditions (matching Redis defaults):
@@ -416,14 +434,56 @@ Redis-style save conditions trigger automatic snapshots:
 // save 60 10000  - Save if ≥10,000 changes in 60 seconds (1 min)
 ```
 
-#### 2. **Manual Background Saves (BGSAVE)**
-```bash
-# Client command triggers background save
-BGSAVE
-# Response: "+Background saving started"
+#### 2. **AOF Logging (Write-Ahead Log)**
+Every write command is logged to ensure durability:
+```cpp
+// All write operations logged to appendonly.aof:
+SET user:1 alice    # Logged immediately
+DEL temp           # Logged immediately  
+SET counter 42     # Logged immediately
+
+// Configurable fsync policies:
+// ALWAYS  - fsync after every write (maximum durability)
+// EVERYSEC - fsync every second (Redis default)
+// NO      - Let OS decide when to fsync (maximum performance)
 ```
 
-#### 3. **Process Forking for Zero-Downtime**
+#### 3. **Background Operations (Zero-Downtime)**
+```bash
+# Manual RDB snapshot
+BGSAVE
+# Response: "+Background saving started"
+
+# Manual AOF compaction  
+BGREWRITEAOF
+# Response: "+Background AOF rewrite started"
+```
+
+#### 4. **Automatic AOF Rewriting**
+Size-based triggers prevent AOF file bloat:
+```cpp
+// Auto-rewrite conditions:
+// - AOF file grows to 2x size after last rewrite
+// - AND AOF file is at least 64MB
+// - Checked every 100 write operations
+
+// Example: AOF starts at 10MB → grows to 20MB → auto-rewrite triggered
+```
+
+#### 5. **Redis-Style Recovery**
+Smart recovery prioritizes AOF over RDB:
+```cpp
+// Recovery logic (matches Redis behavior):
+if (aof_enabled && aof_file_exists()) {
+    load_aof_from_file();  // AOF takes precedence (more complete)
+} else if (rdb_file_exists()) {
+    load_rdb_from_file();  // RDB fallback
+} else {
+    // Start with empty database
+}
+```
+
+#### 6. **Process Forking for Zero-Downtime**
 ```cpp
 pid_t pid = fork();
 if (pid == 0) {
@@ -442,7 +502,7 @@ if (pid == 0) {
 - **Memory efficient**: OS handles memory sharing automatically
 - **Crash safety**: Child process failure doesn't affect server
 
-#### 4. **Atomic File Operations**
+#### 7. **Atomic File Operations**
 ```cpp
 // Write to temporary file first
 std::ofstream file("data/dump.json.tmp");
@@ -453,15 +513,25 @@ file.close();
 std::rename("data/dump.json.tmp", "data/dump.json");
 ```
 
-#### 5. **Startup Recovery**
+#### 8. **Startup Recovery**
 ```cpp
 // Server constructor automatically loads existing snapshot
 load_snapshot_from_file();
 // Output: "Loaded X keys from snapshot"
 ```
 
-### Snapshot Format (JSON)
+### File Structure
+```
+data/
+├── dump.json          # RDB snapshot (JSON format)
+├── dump.json.tmp      # Temporary file during RDB saves
+├── appendonly.aof     # AOF log file
+└── appendonly.aof.tmp # Temporary file during AOF rewrites
+```
 
+### Persistence Formats
+
+#### RDB Snapshot Format (JSON)
 Human-readable JSON format with metadata:
 ```json
 {
@@ -476,6 +546,15 @@ Human-readable JSON format with metadata:
     "counter": "42"
   }
 }
+```
+
+#### AOF Log Format
+Redis-compatible command logging:
+```
+SET user:1 alice
+SET user:2 bob
+DEL temp
+SET counter 42
 ```
 
 ### Signal Handling and Process Management
@@ -640,19 +719,23 @@ while ((pos = read_buffer.find('\n')) != std::string::npos) {
    - Signal handling and graceful shutdown procedures
    - Thread-safe database operations (multi-threaded mode)
 
-4. ✅ **Redis-Style Persistence**
-   - Automatic background saves with Redis-style conditions (900s+1, 300s+10, 60s+10k)
-   - Manual BGSAVE command using fork() for zero-downtime saves
+4. ✅ **Complete Redis-Style Persistence**
+   - RDB snapshots with automatic background saves (Redis-style conditions: 900s+1, 300s+10, 60s+10k)
+   - AOF (Append-Only File) logging with write-ahead logging for maximum durability
+   - Configurable fsync policies (ALWAYS, EVERYSEC, NO) for durability vs performance trade-offs
+   - Manual BGSAVE and BGREWRITEAOF commands using fork() for zero-downtime operations
+   - Automatic AOF rewriting with size-based triggers (2x growth, 64MB minimum)
+   - Redis-style recovery logic with AOF-first precedence and RDB fallback
    - Atomic file operations with temporary files for crash safety
-   - Startup recovery with automatic snapshot loading
-   - SIGCHLD handling for background process cleanup
-   - JSON snapshot format with metadata
+   - Startup recovery with automatic data loading from persistence files
+   - SIGCHLD handling for background process cleanup and zombie prevention
 
 5. 🚧 **Advanced Features** (Planned)
    - Additional Redis commands (INCR, DECR, APPEND, etc.)
    - Data structure operations (Lists, Sets, Hashes)
-   - AOF (Append-Only File) persistence for maximum durability
+   - Persistence configuration system for runtime settings
    - Basic replication (master-slave)
+   - TTL support and key expiration
 
 ## Learning Outcomes
 
@@ -663,8 +746,12 @@ This project provides hands-on experience with:
 - **I/O Multiplexing**: Understanding `select()`, `poll()`, and event loops
 - **Resource Management**: Memory usage patterns and scalability trade-offs
 - **Performance Analysis**: Comparing architectures under different loads
-- **Data Persistence**: Redis-style RDB snapshots and durability guarantees
-- **Process Management**: fork(), copy-on-write, and background task coordination
+- **Dual Persistence**: RDB snapshots and AOF logging for different durability guarantees
+- **Write-Ahead Logging**: AOF implementation with configurable fsync policies
+- **Recovery Strategies**: AOF-first precedence with RDB fallback mechanisms
+- **Background Operations**: fork(), copy-on-write, and zero-downtime maintenance
+- **Process Management**: Child process coordination and cleanup (SIGCHLD)
+- **File Management**: Automatic compaction, size-based triggers, and atomic operations
 
 ### Systems Programming
 - **Network Programming**: TCP sockets, partial reads, connection management  
@@ -679,7 +766,8 @@ This project provides hands-on experience with:
 - **Template Programming**: Generic interfaces for different storage backends
 - **Code Reuse**: Shared utilities across different architectures
 - **API Design**: Command-line interfaces and configuration management
-- **Persistence Patterns**: Background saves, change tracking, and recovery strategies
+- **Persistence Patterns**: Background saves, write-ahead logging, change tracking, and recovery strategies
+- **Durability vs Performance**: Trade-offs between fsync policies and system performance
 
 ## Contributing
 
@@ -690,13 +778,14 @@ This is primarily a learning project, but contributions are welcome! Areas of in
 - **Additional Commands**: Implement more Redis commands (INCR, APPEND, etc.)
 - **Protocol Enhancements**: Support for Redis pipelining
 - **Testing**: Expand test coverage for edge cases and persistence scenarios
+- **Configuration System**: Runtime configuration for persistence policies
 
 ### Advanced Features
-- **AOF Persistence**: Implement append-only file logging for maximum durability
-- **Persistence Configuration**: Add configurable save conditions and file paths
+- **Persistence Configuration**: Runtime configuration for save conditions, AOF policies, and file paths
 - **Replication**: Implement basic master-slave replication
 - **Clustering**: Explore Redis cluster concepts
 - **Monitoring**: Add metrics and observability features
+- **Memory Optimization**: Implement memory-efficient data structures
 
 Please feel free to:
 - Report bugs or unexpected behavior

@@ -20,6 +20,15 @@
 
 extern volatile sig_atomic_t g_running;
 
+namespace redis_clone {
+namespace network {
+
+// Global pointer for signal handler access
+static RedisServer* g_server_instance = nullptr;
+
+}  // namespace network
+}  // namespace redis_clone
+
 // SIGCHLD handler to clean up background save processes
 void handle_child_exit(int sig) {
     int status;
@@ -28,12 +37,23 @@ void handle_child_exit(int sig) {
     // Reap all finished child processes (non-blocking)
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         if (WIFEXITED(status)) {
-            std::cout << "Background save completed (PID: " << pid
+            std::cout << "Background operation completed (PID: " << pid
                       << ", exit code: " << WEXITSTATUS(status) << ")" << std::endl;
+
+            // Check if this was an AOF rewrite process
+            if (redis_clone::network::g_server_instance) {
+                redis_clone::network::g_server_instance->handle_aof_rewrite_completion(pid);
+            }
         } else {
-            std::cout << "Background save failed (PID: " << pid << ")" << std::endl;
+            std::cout << "Background operation failed (PID: " << pid << ")" << std::endl;
         }
     }
+}
+
+// Helper function to check if file exists
+bool file_exists(const std::string& filename) {
+    std::ifstream file(filename);
+    return file.good();
 }
 
 namespace redis_clone {
@@ -43,8 +63,33 @@ RedisServer::RedisServer(int port) : server_fd_(-1) {
     server_start_time_ = std::chrono::steady_clock::now();
     last_save_time_ = server_start_time_;
 
-    load_snapshot_from_file();
+    // Set global instance for signal handler
+    g_server_instance = this;
+
+    // Redis-style recovery: AOF takes precedence over RDB
+    if (aof_enabled && file_exists("data/appendonly.aof")) {
+        std::cout << "Loading data from AOF file ..." << std::endl;
+        load_aof_from_file();
+    } else if (file_exists("data/dump.json")) {
+        std::cout << "Loading data from snapshot ..." << std::endl;
+        load_snapshot_from_file();
+    } else {
+        std::cout << "No persistence files found, starting with empty database" << std::endl;
+    }
+
     signal(SIGCHLD, handle_child_exit);
+
+    // Initialize AOF
+    last_fsync_time_ = server_start_time_;
+    if (aof_enabled) {
+        aof_file_.open("data/appendonly.aof", std::ios::app);
+        if (!aof_file_.is_open()) {
+            std::cerr << "Warning: Could not open AOF file for writing" << std::endl;
+            aof_enabled = false;
+        } else {
+            std::cout << "AOF logging enabled" << std::endl;
+        }
+    }
 
     // Create and configure server socket
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -134,10 +179,16 @@ std::string RedisServer::process_command(const std::string& command) {
         return background_save();
     }
 
+    if (parts.command == "BGREWRITEAOF") {
+        return background_rewrite_aof();
+    }
+
     // Count successful write operations for persistence triggers
     if ((response[0] == '+' && response.substr(0, 3) == "+OK") ||
         (response[0] == ':' && response[1] == '1')) {
         if (parts.command == "SET" || parts.command == "DEL") {
+            // Write to AOF first (write-ahead logging)
+            append_to_aof(command);
             changes_since_save++;
         }
     }
@@ -205,6 +256,9 @@ void RedisServer::run() {
             changes_since_save = 0;
             last_save_time_ = std::chrono::steady_clock::now();
         }
+
+        // Check if AOF needs fsync (for EVERYSEC policy)
+        fsync_aof_if_needed();
     }
 
     // Cleanup on shutdown
@@ -353,6 +407,176 @@ void RedisServer::background_save_internal() {
     } else {
         // Fork failed: log error but don't crash server
         std::cerr << "Failed to fork for automatic save: " << strerror(errno) << std::endl;
+    }
+}
+
+void RedisServer::append_to_aof(const std::string& command) {
+    if (!aof_enabled || !aof_file_.is_open()) {
+        return;
+    }
+
+    // Write command to AOF file with newline
+    aof_file_ << command << std::endl;
+
+    // Handle fsync policy
+    if (fsync_policy_ == FsyncPolicy::ALWAYS) {
+        aof_file_.flush();  // Force write to OS buffer
+        // Note: For cross-platform fsync, we'll handle this in fsync_aof_if_needed()
+    }
+
+    // Check if AOF needs auto-rewriting (every 100 commands to avoid excessive checking)
+    static int command_count = 0;
+    if (++command_count % 100 == 0 && should_auto_rewrite_aof()) {
+        std::cout << "AOF file grew too large, triggering background rewrite..." << std::endl;
+        background_rewrite_aof();
+        // Update the baseline size after rewrite is started
+        aof_last_rewrite_size_ = get_aof_file_size();
+    }
+}
+
+void RedisServer::fsync_aof_if_needed() {
+    if (!aof_enabled || !aof_file_.is_open()) {
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto seconds_since_fsync =
+        std::chrono::duration_cast<std::chrono::seconds>(now - last_fsync_time_).count();
+
+    if (fsync_policy_ == FsyncPolicy::EVERYSEC && seconds_since_fsync >= 1) {
+        aof_file_.flush();  // Force to OS buffer
+        last_fsync_time_ = now;
+        std::cout << "AOF fsync performed" << std::endl;
+    }
+    // FsyncPolicy::NO means we never explicitly fsync - let OS decide
+}
+
+void RedisServer::load_aof_from_file() {
+    std::ifstream aof_file("data/appendonly.aof");
+    if (!aof_file.is_open()) {
+        std::cout << "No existing AOF file found" << std::endl;
+        return;
+    }
+
+    std::string command_line;
+    int commands_replayed = 0;
+
+    std::cout << "Loading AOF file ..." << std::endl;
+
+    while (std::getline(aof_file, command_line)) {
+        if (!command_line.empty()) {
+            // Execute the command to rebuild database state
+            redis_utils::CommandParts parts = redis_utils::extract_command(command_line);
+            redis_utils::process_command_with_store(parts, data_);
+            commands_replayed++;
+        }
+    }
+
+    aof_file.close();
+    std::cout << "AOF recovery complete: " << commands_replayed << " commands replayed"
+              << std::endl;
+}
+
+std::string RedisServer::background_rewrite_aof() {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // Child process: rewrite AOF and exit
+        rewrite_aof_internal();
+        exit(0);
+    } else if (pid > 0) {
+        // Parent process: continue serving
+        aof_rewrite_pid_ = pid;  // Store PID for tracking
+        std::cout << "Background AOF rewrite started (PID: " << pid << ")" << std::endl;
+        return "+Background AOF rewrite started\r\n";
+    } else {
+        return "-ERR Background AOF rewrite failed\r\n";
+    }
+}
+
+void RedisServer::rewrite_aof_internal() {
+    const std::string temp_aof = "data/appendonly.aof.tmp";
+    const std::string final_aof = "data/appendonly.aof";
+
+    std::ofstream new_aof(temp_aof);
+    if (!new_aof.is_open()) {
+        std::cerr << "Error: Could not open " << temp_aof << " for writing" << std::endl;
+        return;
+    }
+
+    // Generate minimal command set from current database state
+    for (const auto& [key, value] : data_) {
+        new_aof << "SET " << key << " " << value << std::endl;
+    }
+
+    new_aof.flush();
+    new_aof.close();
+
+    // Atomic replace of old AOF with new compact AOF
+    if (std::rename(temp_aof.c_str(), final_aof.c_str()) != 0) {
+        std::cerr << "Error: Failed to rename " << temp_aof << " to " << final_aof << std::endl;
+        std::remove(temp_aof.c_str());
+        return;
+    }
+
+    std::cout << "AOF rewrite completed: " << data_.size() << " keys written to new AOF"
+              << std::endl;
+}
+
+// Get current AOF file size
+size_t RedisServer::get_aof_file_size() {
+    std::ifstream file("data/appendonly.aof", std::ios::ate | std::ios::binary);
+    return file.tellg();
+}
+
+// Check if AOF should be rewritten based on size thresholds
+bool RedisServer::should_auto_rewrite_aof() {
+    if (!aof_enabled) return false;
+
+    size_t current_size = get_aof_file_size();
+
+    // Don't rewrite if file is smaller than minimum size
+    if (current_size < aof_auto_rewrite_min_size_) {
+        return false;
+    }
+
+    // Calculate size increase percentage
+    if (aof_last_rewrite_size_ == 0) {
+        // First time - set baseline
+        aof_last_rewrite_size_ = current_size;
+        return false;
+    }
+
+    size_t size_increase = ((current_size - aof_last_rewrite_size_) * 100) / aof_last_rewrite_size_;
+    return size_increase >= aof_auto_rewrite_percentage_;
+}
+
+// Handle completion of AOF rewrite process
+void RedisServer::handle_aof_rewrite_completion(pid_t pid) {
+    if (aof_rewrite_pid_ == pid) {
+        reopen_aof_after_rewrite();
+        aof_rewrite_pid_ = -1;  // Reset
+    }
+}
+
+// Reopen AOF file after background rewrite
+void RedisServer::reopen_aof_after_rewrite() {
+    if (!aof_enabled) return;
+
+    // Close old file handle
+    if (aof_file_.is_open()) {
+        aof_file_.close();
+    }
+
+    // Reopen AOF file (now points to rewritten file)
+    aof_file_.open("data/appendonly.aof", std::ios::app);
+    if (!aof_file_.is_open()) {
+        std::cerr << "Error: Could not reopen AOF file after rewrite" << std::endl;
+        aof_enabled = false;  // Disable AOF if we can't reopen
+    } else {
+        std::cout << "AOF file reopened after rewrite" << std::endl;
+        // Update baseline size after successful reopen
+        aof_last_rewrite_size_ = get_aof_file_size();
     }
 }
 
