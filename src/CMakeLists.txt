@@ -14,6 +14,7 @@ target_link_libraries(redis-clone-cpp
     PRIVATE
         storage
         network
+        pthread
 )
 
 # Future components

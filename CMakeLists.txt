@@ -14,18 +14,26 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Include custom CMake modules
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-include(Dependencies)
-include(TestHelper)
 
-# For Windows: prevent overriding parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-
-# Enable testing
-enable_testing()
+# Only include dependencies and testing when BUILD_TESTING is enabled
+if(BUILD_TESTING)
+    include(Dependencies)
+    include(TestHelper)
+    
+    # For Windows: prevent overriding parent project's compiler/linker settings
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    
+    # Enable testing
+    enable_testing()
+endif()
 
 # Add main project subdirectories
 add_subdirectory(src)
-add_subdirectory(test)
+
+# Only add test directory when testing is enabled
+if(BUILD_TESTING)
+    add_subdirectory(test)
+endif()
 
 # Optional components (uncomment as needed)
 # add_subdirectory(examples)

@@ -30,6 +30,8 @@ This project recreates Redis's core functionality with **two distinct server arc
 ```
 redis-clone-cpp/
 ├── CMakeLists.txt          # Top-level CMake configuration
+├── Dockerfile              # Docker containerization
+├── .dockerignore           # Docker build context exclusions
 ├── cmake/                  # CMake modules and utilities
 │   ├── Dependencies.cmake  # External dependency management
 │   └── TestHelper.cmake   # Test configuration helpers
@@ -99,6 +101,13 @@ redis-clone-cpp/
 - **Dual Server Architectures**: 
   - **Event-driven** (default): Single-threaded with I/O multiplexing using `select()` and persistence support
   - **Multi-threaded** (educational): Thread-per-client with mutex synchronization and storage abstraction
+
+- **Docker Containerization**:
+  - **Production-ready Dockerfile**: Ubuntu 20.04 base with optimized build process
+  - **Build optimization**: Conditional test dependencies with `BUILD_TESTING=OFF` for smaller containers
+  - **Cross-platform compatibility**: Handles Linux-specific dependencies (pthread) and header requirements
+  - **Clean container builds**: `.dockerignore` prevents local development files from contaminating containers
+  - **Stateless containers**: Fresh database state on each container run, ideal for distributed deployments
   
 - **Redis-Style Persistence**:
   - **RDB snapshots**: Background saves triggered by Redis-style conditions (900s+1, 300s+10, 60s+10k)
@@ -209,6 +218,30 @@ cd redis-clone-cpp
 # PID: 12345
 # --------------------------------
 # Event loop server ready to accept connections
+```
+
+#### Docker Deployment
+```bash
+# Build Docker image
+docker build -t redis-clone-cpp .
+
+# Run container (ephemeral - fresh state each run)
+docker run --rm -p 6379:6379 redis-clone-cpp
+
+# Run container in background
+docker run -d --name redis-clone -p 6379:6379 redis-clone-cpp
+
+# View container logs
+docker logs redis-clone
+
+# Connect to containerized Redis
+nc localhost 6379
+SET user alice
+GET user
+
+# Clean up
+docker stop redis-clone
+docker rm redis-clone
 ```
 
 #### Server Mode Selection
@@ -730,7 +763,14 @@ while ((pos = read_buffer.find('\n')) != std::string::npos) {
    - Startup recovery with automatic data loading from persistence files
    - SIGCHLD handling for background process cleanup and zombie prevention
 
-5. 🚧 **Advanced Features** (Planned)
+5. ✅ **Docker Containerization**
+   - Production-ready Dockerfile with Ubuntu 20.04 base
+   - Optimized build process with conditional test dependencies 
+   - Cross-platform compatibility (Linux pthread support, proper headers)
+   - Clean container builds with `.dockerignore` configuration
+   - Stateless container design for distributed deployment readiness
+
+6. 🚧 **Advanced Features** (Planned)
    - Additional Redis commands (INCR, DECR, APPEND, etc.)
    - Data structure operations (Lists, Sets, Hashes)
    - Persistence configuration system for runtime settings
@@ -760,6 +800,7 @@ This project provides hands-on experience with:
 - **Buffer Management**: Production-quality data handling across network calls
 - **File I/O**: Atomic operations, temporary files, and crash safety
 - **Process Control**: fork(), exec(), waitpid(), and zombie prevention
+- **Containerization**: Docker builds, cross-platform compilation, dependency management
 
 ### Software Architecture
 - **Modular Design**: Clean separation of concerns (networking, storage, protocol)

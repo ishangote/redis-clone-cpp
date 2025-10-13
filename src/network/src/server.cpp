@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 #include "network/redis_utils.h"
 
