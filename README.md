@@ -32,6 +32,7 @@ redis-clone-cpp/
 ├── CMakeLists.txt          # Top-level CMake configuration
 ├── Dockerfile              # Docker containerization
 ├── .dockerignore           # Docker build context exclusions
+├── docker-data/            # Docker volume mount directory (gitignored)
 ├── cmake/                  # CMake modules and utilities
 │   ├── Dependencies.cmake  # External dependency management
 │   └── TestHelper.cmake   # Test configuration helpers
@@ -108,6 +109,8 @@ redis-clone-cpp/
   - **Cross-platform compatibility**: Handles Linux-specific dependencies (pthread) and header requirements
   - **Clean container builds**: `.dockerignore` prevents local development files from contaminating containers
   - **Stateless containers**: Fresh database state on each container run, ideal for distributed deployments
+  - **Volume persistence**: Support for Docker volumes to persist data across container restarts
+  - **Development workflow**: Local `docker-data/` directory for easy volume mounting and inspection
   
 - **Redis-Style Persistence**:
   - **RDB snapshots**: Background saves triggered by Redis-style conditions (900s+1, 300s+10, 60s+10k)
@@ -228,8 +231,11 @@ docker build -t redis-clone-cpp .
 # Run container (ephemeral - fresh state each run)
 docker run --rm -p 6379:6379 redis-clone-cpp
 
-# Run container in background
-docker run -d --name redis-clone -p 6379:6379 redis-clone-cpp
+# Run container with persistent storage (recommended)
+docker run --rm -p 6379:6379 -v $(pwd)/docker-data:/app/data redis-clone-cpp
+
+# Run container in background with persistence
+docker run -d --name redis-clone -p 6379:6379 -v $(pwd)/docker-data:/app/data redis-clone-cpp
 
 # View container logs
 docker logs redis-clone
@@ -238,10 +244,23 @@ docker logs redis-clone
 nc localhost 6379
 SET user alice
 GET user
+QUIT
 
-# Clean up
+# Stop container and restart - data should persist
 docker stop redis-clone
 docker rm redis-clone
+docker run -d --name redis-clone -p 6379:6379 -v $(pwd)/docker-data:/app/data redis-clone-cpp
+
+# Verify data survived container restart
+nc localhost 6379
+GET user    # Should return "alice"
+
+# Clean up
+docker stop redis-clone && docker rm redis-clone
+
+# Alternative: Named Docker volume (production style)
+docker volume create redis-data
+docker run --rm -p 6379:6379 -v redis-data:/app/data redis-clone-cpp
 ```
 
 #### Server Mode Selection
@@ -345,24 +364,62 @@ SET test2 value2
 # Watch for "AOF file grew too large, triggering background rewrite..." message
 ```
 
-#### Testing Multiple Concurrent Connections
-You can test both server architectures with multiple simultaneous connections:
+#### Testing Docker Persistence
+Test Redis-style persistence in containerized environment:
 
 ```bash
-# Terminal 1: Start event-driven server
-./build/bin/redis-clone-cpp --mode=eventloop
+# Terminal 1: Start container with persistent volume
+docker run --rm -p 6379:6379 -v $(pwd)/docker-data:/app/data redis-clone-cpp
+# Expected: "No persistence files found, starting with empty database"
 
-# Terminal 2-4: Connect multiple clients simultaneously
-nc localhost 6379  # Each terminal can send commands independently
+# Terminal 2: Connect and add test data
+nc localhost 6379
+SET user:1 alice
+SET user:2 bob
+SET session:123 active
+BGSAVE                    # Trigger manual RDB snapshot
+# Wait for: "Background save completed" message
+SET temp test             # Additional AOF entries
+QUIT
 
-# Example commands in each terminal:
-# Terminal 2: SET user1 alice
-# Terminal 3: SET user2 bob  
-# Terminal 4: GET user1
+# Terminal 1: Check local volume directory
+ls -la docker-data/
+# Should show: appendonly.aof, dump.json
 
-# Then test multi-threaded mode:
-./build/bin/redis-clone-cpp --mode=threaded
-# Connect same number of clients and observe behavior
+# Terminal 1: Stop container (Ctrl+C)
+# Terminal 1: Restart with same volume
+docker run --rm -p 6379:6379 -v $(pwd)/docker-data:/app/data redis-clone-cpp
+# Expected: "Loading data from AOF file..." (AOF takes precedence)
+
+# Terminal 2: Verify data survived container restart
+nc localhost 6379
+GET user:1              # Should return "alice"
+GET session:123         # Should return "active"
+EXISTS user:2           # Should return "1"
+GET temp                # Should return "test"
+```
+
+#### Container vs Volume Data Lifecycle
+Understanding Docker data persistence patterns:
+
+```bash
+# 1. Ephemeral Container (data lost on restart)
+docker run --rm -p 6379:6379 redis-clone-cpp
+# Use case: Testing, temporary instances
+
+# 2. Host Volume Mount (data persists on host)
+docker run --rm -p 6379:6379 -v $(pwd)/docker-data:/app/data redis-clone-cpp
+# Use case: Development, easy file inspection
+
+# 3. Named Volume (Docker-managed persistence)
+docker volume create redis-data
+docker run --rm -p 6379:6379 -v redis-data:/app/data redis-clone-cpp
+# Use case: Production deployments, better isolation
+
+# 4. Clean up volumes
+docker volume ls                  # List volumes
+docker volume rm redis-data       # Remove named volume
+rm -rf ./docker-data/*           # Clean host volume
 ```
 
 ## Architecture Comparison & Design
@@ -801,6 +858,7 @@ This project provides hands-on experience with:
 - **File I/O**: Atomic operations, temporary files, and crash safety
 - **Process Control**: fork(), exec(), waitpid(), and zombie prevention
 - **Containerization**: Docker builds, cross-platform compilation, dependency management
+- **Volume Management**: Docker volumes, data lifecycle, container vs host storage
 
 ### Software Architecture
 - **Modular Design**: Clean separation of concerns (networking, storage, protocol)

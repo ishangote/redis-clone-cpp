@@ -106,6 +106,7 @@ dump.rdb
 
 # Redis Clone specific - persistence data
 data/
+docker-data/
 *.json
 
 # Performance testing artifacts
